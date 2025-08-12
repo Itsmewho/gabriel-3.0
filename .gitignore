@@ -1,0 +1,57 @@
+*.pyc
+__pycache__/
+admin_log.json
+admin.json
+audit_log.json
+
+dwxconnect/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+outputs
+
+# Ignore PyTorch model checkpoints
+*.pt
+
+# Ignore joblib serialized files
+*.joblib
+
+# Ignore PNG, JSON, CSV
+.json
+.png
+.csv
+.joblibs
+.JSON
+.parquet
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.test.local
+
+# Editor directories and files
+node_modules
+dist
+dist-ssr
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS-specific
+Thumbs.db
+backend/results
