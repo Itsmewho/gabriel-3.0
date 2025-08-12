@@ -12,6 +12,7 @@ from utils.helpers import format_market_data
 
 from .run_indicator_pipeline import run_indicator_pipeline
 from .run_calander import calendar_fetch_service
+from .run_clean_redis import cleanup_old_persisted_date_keys
 
 # Logger
 logger = setup_logger(__name__)
@@ -92,11 +93,7 @@ def cache_and_store_market_data(symbol, timeframe):
     last_hour = get_last_60_entries(symbol, timeframe)
 
     if not market_data or len(market_data) < 2:
-        print(
-            blue
-            + f"Niet genoeg historische marktdata voor {symbol} [{timeframe}]."
-            + reset
-        )
+        print(blue + f"Not enough data for {symbol} [{timeframe}]." + reset)
         return
 
     formatted_data = [format_market_data(entry) for entry in market_data if entry]
@@ -113,17 +110,11 @@ def cache_and_store_market_data(symbol, timeframe):
     if unique_combined_history:
         unique_combined_history.pop()
         set_cache(history_key, json.dumps(unique_combined_history))
-        print(
-            green
-            + f"Cached {len(unique_combined_history)} historische entries."
-            + reset
-        )
         store_data_in_db(symbol, timeframe, unique_combined_history)
 
 
-# --- Main Execution Loop (Unchanged) ---
+# --- Main Execution Loop ---
 def run_data_pipeline():
-    # This function is correct and remains unchanged
     print(green + "--- Starting Continuous Service ---" + reset)
     if not RUN_DAILY_FETCH and has_daily_fetch_run():
         print(blue + "Daily fetch already performed. Skipping." + reset)
@@ -137,6 +128,9 @@ def run_data_pipeline():
 
     # 3. Check economic calendar
     calendar_fetch_service()
+
+    # 4. Clean up redis
+    cleanup_old_persisted_date_keys(days=5, dry_run=False)
 
 
 if __name__ == "__main__":

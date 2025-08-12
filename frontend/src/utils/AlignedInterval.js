@@ -7,7 +7,7 @@
  * @returns {Function} -
  */
 
-export function startAlignedInterval(callback, intervalMs, offsetSec = 2) {
+export function startAlignedInterval(callback, intervalMs, offsetSec = 1) {
   const now = new Date();
   const currentMs = now.getTime();
 
@@ -19,8 +19,8 @@ export function startAlignedInterval(callback, intervalMs, offsetSec = 2) {
       now.getUTCHours(),
       now.getUTCMinutes() + 1,
       offsetSec, // aligned start at :02
-      0
-    )
+      0,
+    ),
   );
 
   const delay = nextMinute.getTime() - currentMs;

@@ -1,4 +1,4 @@
-from typing import Any, Iterable, Optional, Sequence, List, Union, Mapping, Tuple
+from typing import Any, Iterable, Optional, Sequence, List, Union, Mapping, Tuple, Dict
 from psycopg2 import OperationalError, ProgrammingError, DatabaseError
 from utils.helpers import red, reset, setup_logger
 from connections.postSQL import get_db_connection
@@ -224,3 +224,39 @@ def get_next_event_time() -> Optional[Tuple[datetime, datetime]]:
 
     except ValueError as e:
         print(f"Database error in get_next_event_time: {e}")
+
+
+def get_indicator_data_from_db(
+    indicator_name: str, symbol: str, timeframe: str, limit: int = 500
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Fetches the latest data for any given indicator from its dedicated database table.
+    """
+    table_name = (
+        f"technical_indicators.{symbol.lower()}_{timeframe.lower()}_{indicator_name}"
+    )
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Use a dictionary cursor to get column names automatically
+                from psycopg2.extras import RealDictCursor
+
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+
+                cur.execute(
+                    f"SELECT * FROM {table_name} ORDER BY time DESC LIMIT %s", (limit,)
+                )
+                results = cur.fetchall()
+
+                if not results:
+                    return None
+
+                # Convert datetime objects to ISO format strings for JSON
+                for row in results:
+                    row["time"] = row["time"].isoformat()
+
+                return results  # type: ignore
+    except Exception as e:
+        print(f"Database error fetching indicator '{indicator_name}': {e}")
+        return None

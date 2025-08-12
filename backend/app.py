@@ -11,6 +11,20 @@ from automation.run_data_pipeline import run_data_pipeline
 app = Flask(__name__)
 CORS(app)
 
+from route.calendar_route import calendar_bp
+from route.indicators import indicators_bp
+from route.historic import historic_bp
+from route.paper import paper_bp
+from route.mode import mode_bp
+from route.trend_eval import trend_eval_bp
+
+app.register_blueprint(calendar_bp)
+app.register_blueprint(indicators_bp)
+app.register_blueprint(historic_bp)
+app.register_blueprint(paper_bp)
+app.register_blueprint(mode_bp)
+app.register_blueprint(trend_eval_bp)
+
 
 class WerkzeugFilter(logging.Filter):
     def filter(self, record):

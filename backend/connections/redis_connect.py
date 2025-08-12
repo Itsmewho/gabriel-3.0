@@ -1,6 +1,6 @@
 import redis
 from config.configure import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB
-from utils.helpers import red, reset, green, setup_logger
+from utils.helpers import red, reset, setup_logger
 
 logger = setup_logger(__name__)
 
