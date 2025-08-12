@@ -1,0 +1,55 @@
+.ordersWrapper {
+  padding: 0.5rem 2rem;
+  font-size: var(--fs-300);
+  margin-top: 5px;
+  animation: fadeIn 0.4s ease-in forwards;
+  line-height: 1.1;
+  overflow-y: scroll;
+  max-height: 88vh;
+}
+.ordersWrapper::-webkit-scrollbar {
+  display: none;
+}
+
+.grid {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.input_type {
+  border: none;
+  background-color: var(--clr-grey);
+  color: var(--clr-white);
+  height: 35px;
+  border-radius: 50px;
+  padding: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.orderBox {
+  display: grid;
+  gap: 0.2rem;
+  margin-bottom: 1.2rem;
+}
+
+.toggleWrapper {
+  margin-bottom: 1rem;
+  text-align: center;
+  font-size: var(--fs-300);
+}
+
+.hint {
+  font-size: 0.75rem;
+  color: var(--clr-white);
+  margin-bottom: 1rem;
+}
+.border {
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--clr-lightgrey);
+}
+
+@keyframes fadeIn {
+  to {
+    opacity: 1;
+  }
+}

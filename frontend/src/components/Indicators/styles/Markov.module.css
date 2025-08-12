@@ -1,0 +1,43 @@
+.markovContainer {
+  width: 100%;
+  height: 100px;
+  margin-right: 50px;
+  position: absolute;
+}
+
+.markovChart {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.markovBar {
+  width: 8px;
+  position: absolute;
+  bottom: 0;
+  transition: height 0.2s ease-in-out;
+  opacity: 0.5;
+}
+
+.bullish {
+  background-color: var(--clr-green);
+  border: 1px solid var(--clr-background);
+  border-radius: 2px;
+}
+
+.bearish {
+  background-color: var(--clr-red);
+  border: 1px solid var(--clr-background);
+  border-radius: 2px;
+}
+
+.neutral {
+  border: 1px solid var(--clr-background);
+  background-color: var(--clr-orange);
+  border-radius: 2px;
+}
+
+.noData {
+  font-family: var(--ff-sans);
+}

@@ -1,0 +1,53 @@
+.tooltip_component {
+  position: relative;
+  z-index: 9999;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.tooltip_component .tooltiptext_component {
+  visibility: hidden;
+  background-color: #363a45;
+  color: #d1d4dc;
+  width: fit-content;
+  text-align: center;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  position: absolute;
+  z-index: 9999;
+  opacity: 0;
+  transition:
+    opacity 0.3s ease,
+    visibility 0.3s ease;
+}
+
+.tooltip_component:hover .tooltiptext_component {
+  visibility: visible;
+  opacity: 1;
+}
+
+.tooltip-top_component .tooltiptext_component {
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.tooltip-right_component .tooltiptext_component {
+  top: 65%;
+  left: 110px;
+  transform: translateY(-50%);
+}
+
+.tooltip-bottom_component .tooltiptext_component {
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.tooltip-left_component .tooltiptext_component {
+  top: 50%;
+  right: 50px;
+  transform: translateY(-50%);
+}

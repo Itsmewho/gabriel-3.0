@@ -1,0 +1,15 @@
+.container {
+  height: 100%;
+  display: flex;
+}
+.box {
+  background-color: hsl(from var(--clr-userscreens) h s l / 0.5);
+  border-radius: 5px;
+  border: 1px solid var(--clr-bordercolor);
+  backdrop-filter: blur(4px);
+  padding: 0 0.5rem 0.5rem 0.5rem;
+  color: var(--clr-white);
+  height: 100%;
+  width: 100%;
+  margin: 5px;
+}

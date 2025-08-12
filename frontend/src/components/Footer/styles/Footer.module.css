@@ -1,0 +1,18 @@
+.footer {
+  width: 100%;
+  position: block;
+  z-index: 1;
+}
+
+.footer_container {
+  padding: 10px;
+  margin: 5px;
+  border-radius: 5px;
+  border: 1px solid var(--clr-bordercolor);
+  background-color: hsl(from var(--clr-userscreens) h s l / 0.85);
+  backdrop-filter: blur(4px);
+}
+.footer_text {
+  height: 25px;
+  color: var(--clr-white);
+}

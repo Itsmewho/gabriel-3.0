@@ -1,0 +1,32 @@
+.tooltip {
+  position: absolute;
+  background-color: rgba(7, 7, 7, 0.3);
+  padding: 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.tooltip_event {
+  position: absolute;
+  transform: translate(-53%, -51.5%); /* Position above the marker */
+  background-color: rgba(7, 7, 7, 0.3);
+  padding: 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  z-index: 100;
+  width: 200px;
+  pointer-events: none;
+}
+
+.tooltip_event .text {
+  display: flex;
+  flex-direction: column;
+}
+
+.tooltip_event .hr {
+  border: none;
+  border-top: 1px solid #4a4a5a;
+  margin: 4px 0;
+}

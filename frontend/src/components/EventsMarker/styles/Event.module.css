@@ -1,0 +1,39 @@
+.eventMarkerContainer {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.eventMarker {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: transform 0.1s ease-in-out;
+}
+
+.eventMarker:hover {
+  transform: scale(1.3);
+}
+
+.highImpact {
+  background-color: var(--clr-red); /* red */
+  box-shadow: 0 0 4px var(--clr-red);
+}
+
+.mediumImpact {
+  background-color: var(--clr-orange); /* Orange */
+  box-shadow: 0 0 4px var(--clr-orange);
+}
+
+.lowImpact {
+  background-color: var(--clr-green); /* SeaGreen */
+  box-shadow: 0 0 4px var(--clr-green);
+}
+
+.NonImpact {
+  background-color: var(--clr-blue); /* DarkBlue */
+  box-shadow: 0 0 4px var(--clr-blue);
+}

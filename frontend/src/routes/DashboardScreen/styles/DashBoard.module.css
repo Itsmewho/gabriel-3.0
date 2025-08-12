@@ -1,0 +1,42 @@
+.dashboardContainer {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.dashboardGrid {
+  display: grid;
+  width: 99.5%;
+  height: 100%;
+  grid-template-columns: 1fr 300px 50px;
+  grid-template-rows: 1fr 0.5fr;
+  grid-column-gap: 5px;
+  grid-row-gap: 5px;
+  transition: 0.3s ease;
+}
+
+.trendWindow,
+.sideMenu,
+.dataWindow,
+.modelWindow {
+  background-color: hsl(from var(--clr-userscreens) h s l / 0.8);
+  border-radius: 5px;
+  border: 1px solid var(--clr-bordercolor);
+  backdrop-filter: blur(4px);
+}
+
+.trendWindow {
+  padding: 0.5rem;
+  grid-area: 1 / 1 / 2 / 2;
+}
+.modelWindow {
+  padding: 0.5rem;
+  grid-area: 2 / 1 / 3 / 2;
+}
+.sideMenu {
+  grid-area: 1 / 3 / 3 / 4;
+}
+.dataWindow {
+  grid-area: 1 / 2 / 3 / 3;
+}

@@ -1,0 +1,30 @@
+.rsiContainer {
+  width: 100%;
+  height: 100px;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+}
+
+.rsiChart {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.rsiBar {
+  width: 8px;
+  border: 1px solid var(--clr-userscreens);
+  min-height: 50px;
+  transition: height 0.2s ease-in-out;
+  opacity: 0.5;
+}
+
+.noData {
+  font-family: var(--ff-sans);
+}

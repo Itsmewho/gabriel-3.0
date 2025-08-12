@@ -12,6 +12,12 @@ app = Flask(__name__)
 CORS(app)
 
 
+class WerkzeugFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return not msg.endswith('" 200 -')
+
+
 # Favicon fun
 @app.route("/favicon.svg")
 def favicon():
@@ -36,5 +42,8 @@ def home():
 
 
 if __name__ == "__main__":
+    log = logging.getLogger("werkzeug")
+    log.addFilter(WerkzeugFilter())
+
     threading.Thread(target=run_data_pipeline, daemon=True).start()
     app.run(debug=False, port=5000, use_reloader=False)

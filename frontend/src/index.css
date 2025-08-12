@@ -1,68 +1,284 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  --ff-serif: 'Outfit', sans-serif;
+  --ff-sans: 'Quicksand', sans-serif;
+
+  /* -----colors----- */
+
+  --clr-white: hsl(0, 0%, 85%);
+  --clr-background: hsl(207, 95%, 8%);
+  --clr-blue: hsl(216, 100%, 33%);
+  --clr-red: hsl(1, 83%, 63%);
+  --clr-orange: hsl(46, 37%, 63%);
+  --clr-green: hsl(174, 63%, 40%);
+  --clr-boxcolor: hsl(209, 100%, 8%);
+  --clr-grey: hsl(224, 39%, 11%);
+  --clr-lightgrey: hsl(189, 78%, 14%);
+  --clr-bordercolor: hsla(215, 63%, 51%, 0.34);
+  --clr-userscreens: hsl(206, 93%, 6%);
+
+  /* ----font-sizes--- */
+
+  --fs-200: 0.8rem;
+  --fs-300: 0.825rem;
+  --fs-400: 1.25rem;
+  --fs-500: 1.5rem;
+  --fs-600: 2.5rem;
+  --fs-700: 3.125rem;
+  --fs-800: 3.75rem;
+  --fs-900: 4.375rem;
+  --fs-1000: 5rem;
+
+  @media (max-width: 45em) {
+    --fs-900: 3.375rem;
+    --fs-500: 2.175rem;
+    --fs-400: 1.6rem;
+    --fs-300: 1.25rem;
+  }
+}
+
+@font-face {
+  font-family: 'Quicksand';
+  font-style: normal;
   font-weight: 400;
+  src: url(/fonts/Quicksand-Regular.woff2) format('woff2');
+}
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 400;
+  src: url(/fonts/Outfit-R.woff2) format('woff2');
+}
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* ------------------- */
+/* Reset               */
+/* ------------------- */
+
+body {
+  font-size: 16px;
+  font-family: 'Outfit', 'Quicksand', system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue',
+    sans-serif;
+  color: var(--clr-white);
+  background-color: var(--clr-background);
+  font-size: 16px;
+  margin: 0;
+  padding: 0;
+  text-rendering: optimizeSpeed;
+  line-height: 1.5;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-size: calc(0.5rem + 0.390625vw);
+  color-scheme: dark light;
+  caret-color: transparent;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background-image: url('../../frontend/src/assets/background.webp');
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  caret-color: transparent;
+}
+
+main {
+  height: 91.2vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+a,
+h1,
+h2,
+h3,
+h4,
+h5,
+p,
+ul,
+li {
+  text-wrap: pretty;
+  font-weight: 400;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+  color: var(--clr-white);
+  text-decoration: none;
 }
 
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+/* ------------------- */
+/* colors             */
+/* ------------------- */
+
+.white {
+  color: var(--clr-white);
+}
+.bg {
+  color: var(--clr-background);
+}
+.red {
+  color: var(--clr-red);
+}
+.green {
+  color: var(--clr-green);
+}
+.blue {
+  color: var(--clr-blue);
+}
+.boxcolor {
+  color: var(--clr-boxcolor);
+}
+.bordercolor {
+  color: var(--clr-bordercolor);
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* ------------------- */
+/* typograpyh          */
+/* ------------------- */
+
+.ff-serif {
+  font-family: var(--ff-serif);
+}
+.ff-sans {
+  font-family: var(--ff-sans);
+}
+.upper {
+  text-transform: uppercase;
+}
+.fs-1000 {
+  font-size: var(--fs-1000);
+}
+.fs-900 {
+  font-size: var(--fs-900);
+}
+.fs-800 {
+  font-size: var(--fs-800);
+}
+.fs-700 {
+  font-size: var(--fs-700);
+}
+.fs-600 {
+  font-size: var(--fs-600);
+}
+.fs-500 {
+  font-size: var(--fs-500);
+}
+.fs-400 {
+  font-size: var(--fs-400);
+}
+.fs-300 {
+  font-size: var(--fs-300);
+}
+.fs-200 {
+  font-size: var(--fs-200);
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
+/* ------------------- */
+/* utils               */
+/* ------------------- */
+
+.btn {
+  padding: 0.2rem 1rem;
+  border-radius: 50px;
+  border: none;
+  background-color: var(--clr-blue);
+  box-shadow: 5px 5px 10px hsla(0, 0%, 0%, 0.1);
+  transition: 0.2s ease-in-out;
+}
+
+.btn:hover:not(:disabled) {
+  background-color: var(--clr-green);
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+.btn:disabled {
+  background: var(--clr-lightgrey);
+  cursor: not-allowed;
+}
+
+.btn.active {
+  background-color: var(--clr-red);
+  box-shadow: 5px 5px 10px hsla(0, 0%, 0%, 0.292);
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+}
+
+/* ------------------- */
+/* Global loader       */
+/* ------------------- */
+
+.loader {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.outer-circle {
+  position: absolute;
+  width: 250px;
+  height: 250px;
+  border: 12px solid transparent;
+  border-top-color: var(--clr-red);
+  border-radius: 50%;
+  animation: rotateOuter 2s linear infinite;
+  clip-path: inset(20deg);
+}
+
+.inner-circle {
+  position: absolute;
+  width: 200px;
+  height: 200px;
+  border: 9px solid transparent;
+  border-top-color: var(--clr-green);
+  border-radius: 50%;
+  animation: rotateInner 1.2s linear infinite;
+  clip-path: inset(20deg);
+}
+
+@keyframes rotateOuter {
+  from {
+    transform: rotate(0deg);
   }
-  a:hover {
-    color: #747bff;
+  to {
+    transform: rotate(360deg);
   }
-  button {
-    background-color: #f9f9f9;
+}
+
+@keyframes rotateInner {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
   }
 }
