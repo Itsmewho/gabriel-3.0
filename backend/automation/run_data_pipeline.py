@@ -18,6 +18,7 @@ from .run_clean_redis import cleanup_old_persisted_date_keys
 logger = setup_logger(__name__)
 
 # --- Configuration ---
+FORCE_RUN = False
 RUN_DAILY_FETCH = False  # This can be toggled for manual runs
 REDIS_DAILY_KEY = f"daily_fetch_done:{datetime.now().strftime('%Y-%m-%d')}"
 SYMBOL = "EURUSD"
@@ -115,7 +116,7 @@ def cache_and_store_market_data(symbol, timeframe):
 
 # --- Main Execution Loop ---
 def run_data_pipeline():
-    print(green + "--- Starting Continuous Service ---" + reset)
+    print(green + "--- Starting Daily data fetch ---" + reset)
     if not RUN_DAILY_FETCH and has_daily_fetch_run():
         print(blue + "Daily fetch already performed. Skipping." + reset)
         return
@@ -131,6 +132,9 @@ def run_data_pipeline():
 
     # 4. Clean up redis
     cleanup_old_persisted_date_keys(days=5, dry_run=False)
+
+    # last mark the key
+    mark_daily_fetch_completed()
 
 
 if __name__ == "__main__":
