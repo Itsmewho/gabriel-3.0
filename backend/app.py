@@ -8,6 +8,10 @@ from flask import send_from_directory
 
 from automation.run_data_pipeline import run_data_pipeline
 
+from trend.current_candle import RealTimeCandleBuilder
+from services.DWXhandler import start_dwx_client_thread
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -17,6 +21,7 @@ from route.historic import historic_bp
 from route.paper import paper_bp
 from route.mode import mode_bp
 from route.trend_eval import trend_eval_bp
+from route.trend import trend_bp
 
 app.register_blueprint(calendar_bp)
 app.register_blueprint(indicators_bp)
@@ -24,6 +29,10 @@ app.register_blueprint(historic_bp)
 app.register_blueprint(paper_bp)
 app.register_blueprint(mode_bp)
 app.register_blueprint(trend_eval_bp)
+app.register_blueprint(trend_bp)
+
+# -- DWX config
+app.config["CANDLE_BUILDER"] = RealTimeCandleBuilder()
 
 
 class WerkzeugFilter(logging.Filter):
@@ -58,6 +67,13 @@ def home():
 if __name__ == "__main__":
     log = logging.getLogger("werkzeug")
     log.addFilter(WerkzeugFilter())
+
+    dwx_thread = threading.Thread(
+        target=start_dwx_client_thread,
+        args=(app.config["CANDLE_BUILDER"],),
+        daemon=True,
+    )
+    dwx_thread.start()
 
     threading.Thread(target=run_data_pipeline, daemon=True).start()
     app.run(debug=False, port=5000, use_reloader=False)

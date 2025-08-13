@@ -7,6 +7,8 @@ import { useApi } from '../../context/ApiContext';
 import { fetchCalendar } from '../../api/Calendar';
 import windowStyles from './styles/TrendWindow.module.css';
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
 export default function TrendWindow() {
   const { trendMarketData: marketData } = useApi();
   const [selectedHours, setSelectedHours] = useState(4); // match mt5 standard timeframe
@@ -82,7 +84,6 @@ export default function TrendWindow() {
 
           <div className={windowStyles.price_bar_container}>
             <div className={windowStyles.spacer}>
-              <label className={windowStyles.label}>Hours</label>
               <input
                 type="number"
                 min="1"

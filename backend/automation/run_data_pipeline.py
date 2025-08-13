@@ -1,14 +1,9 @@
 import json
 from datetime import datetime, timedelta, timezone
-
-# --- Module Imports ---
 from services.mt5_client import get_last_hours, get_last_60_entries
-
 from operations.redis_operations import set_cache, persist_redis_key, get_cache
 from connections.postSQL import get_db_connection
-from utils.helpers import red, green, blue, reset, setup_logger
-from utils.helpers import format_market_data
-
+from utils.helpers import red, green, blue, reset, setup_logger, format_market_data
 
 from .run_indicator_pipeline import run_indicator_pipeline
 from .run_calander import calendar_fetch_service
@@ -26,7 +21,6 @@ TIMEFRAME = "1m"
 MINUTES_MAP = {
     "1m": 5760,
 }
-
 
 # --- Has pipeline run ---
 

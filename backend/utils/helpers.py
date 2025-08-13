@@ -16,6 +16,10 @@ import os
 from typing import Optional
 
 
+VALID_TIMEFRAMES = {"1m"}
+VALID_SYMBOLS = {"EURUSD"}
+
+
 def get_env_str(key: str, default: Optional[str] = None) -> str:
     value = os.getenv(key, default)
     if value is None:
@@ -108,3 +112,25 @@ def create_future_price_targets(
     df_out["target_price_1m_ahead"] = df_out["close"].shift(-1)
 
     return df_out
+
+
+def validate_timeframe(timeframe: str) -> tuple[bool, str | None]:
+    if timeframe not in VALID_TIMEFRAMES:
+        return (
+            False,
+            f"Invalid timeframe: {timeframe}. Allowed: {', '.join(VALID_TIMEFRAMES)}",
+        )
+    return True, None
+
+
+def validate_symbol(symbol: str) -> tuple[bool, str | None]:
+    if symbol.upper() not in VALID_SYMBOLS:
+        return False, f"Invalid symbol: {symbol}. Allowed: {', '.join(VALID_SYMBOLS)}"
+    return True, None
+
+
+def normalize_timeframe(tf: str) -> str:
+    tf_lower = tf.lower()
+    if "m" in tf_lower:
+        return f"M{tf_lower.replace('m', '')}"
+    return tf.upper()

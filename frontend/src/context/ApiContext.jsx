@@ -1,6 +1,13 @@
 // context/ApiContext.jsx
 import PropTypes from 'prop-types';
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from 'react';
 import { FETCHTIME, LASTCANDLETIME } from '../config/constants';
 import { startAlignedInterval } from '../utils/AlignedInterval';
 import { fetchHistoricTrades } from '../api/Historic';
@@ -16,7 +23,25 @@ import {
 } from '../api/Indicators';
 import { fetchLastCandle, fetchMarketHistory } from '../api/Trend';
 
-export const ApiContext = createContext(null);
+const ApiContext = createContext(null);
+
+const minuteKey = (iso) => {
+  const d = new Date(iso);
+  d.setSeconds(0, 0);
+  return d.toISOString();
+};
+
+const dedupeByMinuteSorted = (arr = []) => {
+  if (!Array.isArray(arr) || arr.length === 0) return [];
+  const map = new Map();
+  for (const c of arr) {
+    if (!c?.time) continue;
+    map.set(minuteKey(c.time), c); // last wins
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([, v]) => v);
+};
 
 export function ApiProvider({ children }) {
   const [emaData, setEmaData] = useState([]);
@@ -30,6 +55,7 @@ export function ApiProvider({ children }) {
   const [trendMarketData, setTrendMarketData] = useState([]);
   const [bollingerData, setBollingerData] = useState([]);
   const { mode } = useTradingMode();
+  const hasHistoryRef = useRef(false);
 
   const fetchAllInitialData = useCallback(async () => {
     const symbol = 'EURUSD';
@@ -59,8 +85,10 @@ export function ApiProvider({ children }) {
       tradesRes,
     ] = results;
 
-    if (historyRes.status === 'fulfilled' && historyRes.value.success)
-      setTrendMarketData(historyRes.value.data);
+    if (historyRes.status === 'fulfilled' && historyRes.value.success) {
+      hasHistoryRef.current = true;
+      setTrendMarketData(dedupeByMinuteSorted(historyRes.value.data));
+    }
     if (emaRes.status === 'fulfilled' && emaRes.value.success)
       setEmaData(emaRes.value.data);
     if (smaRes.status === 'fulfilled' && smaRes.value.success)
@@ -98,14 +126,21 @@ export function ApiProvider({ children }) {
         if (!lastCandleRes.success) return;
 
         setTrendMarketData((prev) => {
-          if (!prev?.length) return [lastCandleRes.data];
-          const i = prev.findIndex((c) => c.time === lastCandleRes.data.time);
-          if (i !== -1) {
-            const next = prev.slice();
-            next[i] = lastCandleRes.data;
-            return next;
+          if (!hasHistoryRef.current) {
+            return lastCandleRes.data ? [lastCandleRes.data] : [];
           }
-          return [...prev, lastCandleRes.data];
+
+          const next = Array.isArray(prev) ? [...prev] : [];
+          const k = minuteKey(lastCandleRes.data.time);
+          const idx = next.findIndex((c) => c?.time && minuteKey(c.time) === k);
+          if (idx !== -1) next[idx] = lastCandleRes.data;
+          else next.push(lastCandleRes.data);
+
+          const MAX_KEEP = 1; // cap growth
+          if (next.length > MAX_KEEP) next.splice(0, next.length - MAX_KEEP);
+
+          next.sort((a, b) => new Date(a.time) - new Date(b.time));
+          return next;
         });
       },
       LASTCANDLETIME,

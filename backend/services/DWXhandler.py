@@ -1,6 +1,4 @@
-import os
 from threading import Thread
-
 from DWX.python.api.dwx_client import dwx_client
 
 

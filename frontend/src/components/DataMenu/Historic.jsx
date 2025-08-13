@@ -1,26 +1,36 @@
-import styles from './styles/Historic.module.css';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useTradingMode } from '../../context/TradingmodeContext';
 import { fetchHistoricTrades } from '../../api/Historic';
+import styles from './styles/Historic.module.css';
 import Toast from '../Toast/Toastpopup';
 
 const Historic = () => {
   const { mode } = useTradingMode();
   const [trades, setTrades] = useState([]);
+  const [account, setAccount] = useState(null);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fadeIn, setFadeIn] = useState(false);
-  const [grouped, setGrouped] = useState({ positive: {}, negative: {} });
+  const reqId = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
+    reqId.current += 1;
+    const id = reqId.current;
+
+    setLoading(true);
+    setFadeIn(false);
+
     const fetchData = async () => {
-      setLoading(true);
       const result = await fetchHistoricTrades(mode);
+      if (cancelled || id !== reqId.current) return; // ignore stale response
 
       if (result.success) {
-        setTrades(result.trades);
+        setTrades(result.trades || []);
+        setAccount(result.account || null);
       } else {
         setTrades([]);
+        setAccount(null);
         setToast({
           message: result.error || 'Failed to fetch trade data.',
           type: 'error',
@@ -31,31 +41,30 @@ const Historic = () => {
     };
 
     fetchData();
+    return () => {
+      cancelled = true;
+    };
   }, [mode]);
 
-  // Group trades into histogram buckets
-  useEffect(() => {
+  // Group trades into histogram buckets using a memoized compute
+  const grouped = useMemo(() => {
     const pos = {};
     const neg = {};
-
-    trades.forEach((t) => {
-      const pnl = parseFloat(t.pnl_percent || 0);
+    for (const t of trades) {
+      const pnl = Number(t.pnl_percent || 0);
       const bucket = Math.floor(Math.abs(pnl) / 10) * 10;
-      if (pnl >= 0) {
-        pos[bucket] = (pos[bucket] || 0) + 1;
-      } else {
-        neg[bucket] = (neg[bucket] || 0) + 1;
-      }
-    });
-
-    setGrouped({ positive: pos, negative: neg });
+      if (pnl >= 0) pos[bucket] = (pos[bucket] || 0) + 1;
+      else neg[bucket] = (neg[bucket] || 0) + 1;
+    }
+    return { positive: pos, negative: neg };
   }, [trades]);
 
-  const maxCount = Math.max(
-    ...Object.values(grouped.positive),
-    ...Object.values(grouped.negative),
-    1,
-  );
+  const maxCount = useMemo(() => {
+    const p = Object.values(grouped.positive);
+    const n = Object.values(grouped.negative);
+    const all = [...p, ...n];
+    return all.length ? Math.max(...all, 1) : 1;
+  }, [grouped]);
 
   useEffect(() => {
     if (!loading) {
@@ -64,7 +73,7 @@ const Historic = () => {
     }
   }, [loading]);
 
-  const totalPnl = trades.reduce((acc, t) => acc + parseFloat(t.pnl_absolute || 0), 0);
+  const totalPnl = trades.reduce((acc, t) => acc + Number(t.pnl_absolute || 0), 0);
   const pnlColor = totalPnl >= 0 ? styles.greenText : styles.redText;
 
   return (
@@ -74,53 +83,66 @@ const Historic = () => {
           {mode === 'paper' ? 'Paper Trades' : 'Live Trades'}
         </h3>
 
-        <div className={styles.histogramWrapper}>
-          <div className={styles.axisLabel}>PROFIT</div>
-          {Object.keys(grouped.positive)
-            .sort((a, b) => b - a)
-            .map((bucket) => {
-              const count = grouped.positive[bucket];
-              const width = Math.round((count / maxCount) * 180);
-              return (
-                <div key={`p${bucket}`} className={styles.barRow}>
-                  <span className={styles.barLabel}>{bucket}%</span>
-                  <div
-                    className={`${styles.bar} ${styles.profit}`}
-                    style={{ width: `${width}px` }}
-                  >
-                    {count}
-                  </div>
-                </div>
-              );
-            })}
+        {loading ? (
+          <div>Loading…</div>
+        ) : (
+          <>
+            <div className={styles.histogramWrapper}>
+              <div className={styles.axisLabel}>PROFIT</div>
+              {Object.keys(grouped.positive)
+                .sort((a, b) => Number(b) - Number(a))
+                .map((bucket) => {
+                  const count = grouped.positive[bucket];
+                  const width = Math.round((count / maxCount) * 180);
+                  return (
+                    <div key={`p${bucket}`} className={styles.barRow}>
+                      <span className={styles.barLabel}>{bucket}%</span>
+                      <div
+                        className={`${styles.bar} ${styles.profit}`}
+                        style={{ width: `${width}px` }}
+                      >
+                        {count}
+                      </div>
+                    </div>
+                  );
+                })}
 
-          <div className={styles.axisLabel}>LOSS</div>
-          {Object.keys(grouped.negative)
-            .sort((a, b) => a - b)
-            .map((bucket) => {
-              const count = grouped.negative[bucket];
-              const width = Math.round((count / maxCount) * 180);
-              return (
-                <div key={`n${bucket}`} className={styles.barRow}>
-                  <span className={styles.barLabel}>{bucket}%</span>
-                  <div
-                    className={`${styles.bar} ${styles.loss}`}
-                    style={{ width: `${width}px` }}
-                  >
-                    {count}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
+              <div className={styles.axisLabel}>LOSS</div>
+              {Object.keys(grouped.negative)
+                .sort((a, b) => Number(a) - Number(b))
+                .map((bucket) => {
+                  const count = grouped.negative[bucket];
+                  const width = Math.round((count / maxCount) * 180);
+                  return (
+                    <div key={`n${bucket}`} className={styles.barRow}>
+                      <span className={styles.barLabel}>{bucket}%</span>
+                      <div
+                        className={`${styles.bar} ${styles.loss}`}
+                        style={{ width: `${width}px` }}
+                      >
+                        {count}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
 
-        <div className={styles.summaryBox}>
-          <p>
-            Total of last {trades.length} trades:{' '}
-            <span className={pnlColor}>${totalPnl.toFixed(2)}</span>
-          </p>
-        </div>
+            <div className={styles.summaryBox}>
+              <p>
+                Total of last {trades.length} trades:{' '}
+                <span className={pnlColor}>${totalPnl.toFixed(2)}</span>
+              </p>
+              {account && (
+                <p>
+                  Current Account Balance:{' '}
+                  <span>${Number(account.balance ?? 0).toFixed(2)}</span>
+                </p>
+              )}
+            </div>
+          </>
+        )}
       </div>
+
       {toast && (
         <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
       )}
