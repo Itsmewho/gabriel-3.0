@@ -56,7 +56,7 @@ def calendar_fetch_service() -> None:
         print(green + "RUN_CALENDAR_FETCH=True - Running full backfill mode!" + reset)
     else:
         start_date = today - timedelta(days=3)
-        end_date = today + timedelta(days=3)
+        end_date = today + timedelta(days=1)
     fetch_events_range(start_date, end_date)
 
     print(blue + "Starting continuous refetch loop for pending actuals..." + reset)

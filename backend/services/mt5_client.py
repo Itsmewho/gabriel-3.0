@@ -83,7 +83,6 @@ def get_last_60_entries(
 ) -> List[Dict[str, Any]]:
     """Fetches the last 120 candles from the current moment."""
     timeframe = TIMEFRAMES[timeframe_key]
-    print(f"Fetching last 120 entries for {symbol}...")
     try:
         with connect_mt5():
             rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 120)  # type: ignore

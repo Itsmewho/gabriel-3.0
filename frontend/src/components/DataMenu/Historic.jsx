@@ -84,7 +84,7 @@ const Historic = () => {
         </h3>
 
         {loading ? (
-          <div>Loading…</div>
+          <div>Synchronization</div>
         ) : (
           <>
             <div className={styles.histogramWrapper}>

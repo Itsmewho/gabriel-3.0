@@ -27,11 +27,10 @@ SHORT_TERM_WINDOW = 5760
 MAX_FETCH_LIMIT = LONG_TERM_WINDOW + 200
 
 
-# --- Database Interaction (No changes here) ---
+# --- Database Interaction  ---
 def create_indicator_table(
     engine, schema: str, table_name: str, columns_sql: str, is_full_backfill: bool
 ):
-    # ... (this function is correct)
     try:
         with engine.connect() as connection:
             connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
@@ -58,7 +57,6 @@ def create_indicator_table(
 
 
 def store_dataframe(engine, df: pd.DataFrame, schema: str, table_name: str):
-    # ... (this function is correct)
     temp_table_name = f"temp_{table_name}"
     df_to_save = df.dropna()
     if df_to_save.empty:
@@ -85,7 +83,6 @@ def store_dataframe(engine, df: pd.DataFrame, schema: str, table_name: str):
         connection.commit()
 
 
-# --- Main Pipeline Runner ---
 def run_indicator_pipeline(mode: str = "live", skip_evals: bool = False):
     """
     Main function to run all calculations with optimized data slicing.
@@ -118,10 +115,6 @@ def run_indicator_pipeline(mode: str = "live", skip_evals: bool = False):
             df_for_calc = df
         else:
             df_for_calc = df.tail(SHORT_TERM_WINDOW)
-            print(
-                f"Running in LIVE mode, calculations will use the last {SHORT_TERM_WINDOW} data points."
-            )
-
         is_full_backfill = mode == "full"
 
         standard_indicators = calculate_standard_indicators(df_for_calc.copy())

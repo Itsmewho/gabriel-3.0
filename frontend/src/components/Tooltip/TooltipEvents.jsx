@@ -22,9 +22,6 @@ const TooltipEvent = ({ eventData }) => {
         </span>
         <hr className={styles.hr} />
         <span>
-          <strong>Actual:</strong> {formatValue(eventData.actual)}
-        </span>
-        <span>
           <strong>Forecast:</strong> {formatValue(eventData.forecast)}
         </span>
         <span>
@@ -41,7 +38,6 @@ TooltipEvent.propTypes = {
     time: PropTypes.string,
     currency: PropTypes.string,
     impact: PropTypes.string,
-    actual: PropTypes.number,
     forecast: PropTypes.number,
     previous: PropTypes.number,
   }).isRequired,

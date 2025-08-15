@@ -4,13 +4,12 @@ from indicators.markov import build_markov_prediction
 
 indicators_bp = Blueprint("indicators", __name__)
 
-MAX_INDICATOR_POINTS = 9000
+MAX_INDICATOR_POINTS = 9000  # its's over 9000 WHaaaahhhhhhhhh!!!!!!!!!!!
 
 
 def get_data_or_404(indicator_name, symbol, timeframe):
     """Helper to fetch a large amount of indicator data and format the response."""
 
-    # Pass the larger limit to the database function.
     data = get_indicator_data_from_db(
         indicator_name, symbol, timeframe, limit=MAX_INDICATOR_POINTS
     )
@@ -56,7 +55,6 @@ def get_markov_prediction(symbol: str, timeframe: str):
     """
     Builds a live Markov Model prediction using pre-calculated historical states.
     """
-    # 1. Fetch the last 60 states from the database (this is fast)
     historical_states = get_indicator_data_from_db(
         "markov", symbol, timeframe, limit=60
     )
@@ -72,7 +70,6 @@ def get_markov_prediction(symbol: str, timeframe: str):
             404,
         )
 
-    # 2. Build the prediction from the fetched states
     prediction_data = build_markov_prediction(historical_states)
 
     return jsonify({"success": True, "data": prediction_data})

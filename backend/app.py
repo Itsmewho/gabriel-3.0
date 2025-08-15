@@ -6,6 +6,7 @@ from flask import Flask
 from flask_cors import CORS
 from flask import send_from_directory
 
+from automation.run_historic_trend import run_continuous_data_pipeline
 from automation.run_data_pipeline import run_data_pipeline
 
 from trend.current_candle import RealTimeCandleBuilder
@@ -75,5 +76,9 @@ if __name__ == "__main__":
     )
     dwx_thread.start()
 
-    threading.Thread(target=run_data_pipeline, daemon=True).start()
+    threading.Thread(target=run_continuous_data_pipeline, daemon=True).start()
+    threading.Thread(
+        target=run_data_pipeline, daemon=True
+    ).start()  # will run once a day else skip
+
     app.run(debug=False, port=5000, use_reloader=False)

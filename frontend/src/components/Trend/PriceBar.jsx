@@ -1,53 +1,80 @@
 import { useMemo, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import priceBarStyles from './styles/PriceBar.module.css';
+import styles from './styles/PriceBar.module.css';
 
-export function PriceBar({ currentPrice = 0, scale }) {
-  const { high = 0, low = 0 } = scale || {};
-  const range = Math.max(0, high - low);
+const PriceBar = ({ marketData = [], currentPrice = 0, selectedHours }) => {
+  const lastHoursData = useMemo(() => {
+    if (!marketData.length) return [];
+    const lastCandleTime = new Date(marketData[marketData.length - 1].time);
+    const cutoffTime = new Date(
+      lastCandleTime.getTime() - selectedHours * 60 * 60 * 1000,
+    );
 
-  const steps = useMemo(() => {
-    if (!range) return [];
-    const step = range / 10;
-    return Array.from({ length: 10 }, (_, i) => (low + i * step).toFixed(5)).reverse();
-  }, [low, range]);
+    return marketData.filter((entry) => new Date(entry.time) >= cutoffTime);
+  }, [marketData, selectedHours]);
 
-  const pos = useCallback(
-    (p) => {
-      if (!range || p == null) return '50%';
-      return `${((high - p) / range) * 100}%`;
+  const highPrice = useMemo(() => {
+    if (!lastHoursData.length) return 0;
+    return Math.max(...lastHoursData.map((entry) => entry.high));
+  }, [lastHoursData]);
+
+  const lowPrice = useMemo(() => {
+    if (!lastHoursData.length) return 0;
+    return Math.min(...lastHoursData.map((entry) => entry.low));
+  }, [lastHoursData]);
+
+  const priceSteps = useMemo(() => {
+    if (highPrice === 0 || lowPrice === 0) return [];
+    const stepSize = (highPrice - lowPrice) / 10;
+    return [...Array(10)].map((_, i) => (lowPrice + i * stepSize).toFixed(5)).reverse();
+  }, [highPrice, lowPrice]);
+
+  const getPricePosition = useCallback(
+    (price) => {
+      if (!highPrice || !lowPrice || price == null) return '50%';
+      return `${((highPrice - price) / (highPrice - lowPrice)) * 100}%`;
     },
-    [high, range],
+    [highPrice, lowPrice],
   );
 
   return (
-    <div className={priceBarStyles.price_bar_container}>
-      <div className={priceBarStyles.price_labels}>
-        <div className={priceBarStyles.high_label} style={{ top: pos(high) }}>
-          {high.toFixed?.(5) ?? '0.00000'}
+    <div className={styles.price_bar_container}>
+      <div className={styles.price_labels}>
+        <div className={styles.high_label} style={{ top: getPricePosition(highPrice) }}>
+          {highPrice.toFixed(5)}
         </div>
 
-        {steps.map((s, i) => (
-          <div key={i} className={priceBarStyles.price_step}>
-            {s}
+        {priceSteps.map((price, index) => (
+          <div key={index} className={styles.price_step}>
+            {price}
           </div>
         ))}
 
-        <div className={priceBarStyles.current_label} style={{ top: pos(currentPrice) }}>
+        <div
+          className={styles.current_label}
+          style={{ top: getPricePosition(currentPrice) }}
+        >
           {currentPrice.toFixed(5)}
         </div>
 
-        <div className={priceBarStyles.low_label} style={{ top: pos(low) }}>
-          {low.toFixed?.(5) ?? '0.00000'}
+        <div className={styles.low_label} style={{ top: getPricePosition(lowPrice) }}>
+          {lowPrice.toFixed(5)}
         </div>
       </div>
     </div>
   );
-}
+};
 
 PriceBar.propTypes = {
+  marketData: PropTypes.arrayOf(
+    PropTypes.shape({
+      time: PropTypes.string.isRequired,
+      high: PropTypes.number.isRequired,
+      low: PropTypes.number.isRequired,
+    }),
+  ).isRequired,
   currentPrice: PropTypes.number.isRequired,
-  scale: PropTypes.shape({ high: PropTypes.number, low: PropTypes.number }).isRequired,
+  selectedHours: PropTypes.number.isRequired,
 };
 
 export default PriceBar;

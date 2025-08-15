@@ -1,5 +1,5 @@
 /* eslint-disable jsx-a11y/label-has-associated-control */
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import TrendChart from './TrendChart';
 import PriceBar from './PriceBar';
 import Loader from '../../../loader';
@@ -9,26 +9,102 @@ import windowStyles from './styles/TrendWindow.module.css';
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
+const minuteKey = (t) => {
+  if (typeof t === 'string') return t.slice(0, 16); // assumes already local
+  const d = new Date(t);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(
+    d.getHours(),
+  )}:${p2(d.getMinutes())}`;
+};
+
 export default function TrendWindow() {
-  const { trendMarketData: marketData } = useApi();
-  const [selectedHours, setSelectedHours] = useState(4); // match mt5 standard timeframe
+  const { trendMarketData: liveData } = useApi();
+
+  const [history, setHistory] = useState([]);
+  const historyMapRef = useRef(new Map());
+  const [loadedOnce, setLoadedOnce] = useState(false);
+
+  const [selectedHours, setSelectedHours] = useState(4);
   const [economicEvents, setEconomicEvents] = useState([]);
 
-  const isLoading = !marketData.length;
+  // Fetch & incrementally merge persisted history without flicker.
+  useEffect(() => {
+    let cancelled = false;
 
-  // Filter once for the selected window
+    const mergeHistory = (arr) => {
+      if (!Array.isArray(arr) || arr.length === 0) return false;
+      let changed = false;
+      const map = historyMapRef.current;
+      for (const b of arr) {
+        if (!b || !b.time) continue;
+        const k = minuteKey(b.time);
+        const prev = map.get(k);
+        // Only update if materially different
+        if (
+          !prev ||
+          prev.open !== b.open ||
+          prev.high !== b.high ||
+          prev.low !== b.low ||
+          prev.close !== b.close ||
+          prev.tick_volume !== b.tick_volume
+        ) {
+          map.set(k, b);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const next = Array.from(map.values()).sort(
+          (a, b) => new Date(a.time) - new Date(b.time),
+        );
+        setHistory(next);
+      }
+      return changed;
+    };
+
+    const fetchOnce = async () => {
+      try {
+        const res = await fetch('/api/history/EURUSD/1m');
+        const json = await res.json().catch(() => null);
+        if (!json || json.success !== true) return;
+        // Ignore empty refreshes if shown data
+        if (json.data && json.data.length) mergeHistory(json.data);
+        if (!cancelled) setLoadedOnce(true);
+      } catch {}
+    };
+
+    fetchOnce();
+    const id = setInterval(fetchOnce, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Merge history + last live candle (dedupe by minute)
+  const merged = useMemo(() => {
+    const map = new Map();
+    for (const b of history) if (b?.time) map.set(minuteKey(b.time), b);
+    const last = liveData?.length ? liveData[liveData.length - 1] : null;
+    if (last?.time) map.set(minuteKey(last.time), last);
+    return Array.from(map.values()).sort((a, b) => new Date(a.time) - new Date(b.time));
+  }, [history, liveData]);
+
+  const isLoading = !loadedOnce && merged.length === 0;
+
+  // Window filter
   const filteredData = useMemo(() => {
-    if (!marketData.length) return [];
-    const last = new Date(marketData.at(-1).time);
+    if (!merged.length) return [];
+    const last = new Date(merged[merged.length - 1].time);
     const cutoff = new Date(last.getTime() - selectedHours * MS_PER_HOUR);
-    return marketData.filter((e) => new Date(e.time) >= cutoff);
-  }, [marketData, selectedHours]);
+    return merged.filter((e) => new Date(e.time) >= cutoff);
+  }, [merged, selectedHours]);
 
-  // Shared price scale from filtered window
+  // Shared price scale
   const scale = useMemo(() => {
     if (!filteredData.length) return { high: 0, low: 0 };
-    let hi = -Infinity;
-    let lo = Infinity;
+    let hi = -Infinity,
+      lo = Infinity;
     for (const c of filteredData) {
       if (c.high != null) hi = Math.max(hi, c.high);
       if (c.low != null) lo = Math.min(lo, c.low);
@@ -37,7 +113,6 @@ export default function TrendWindow() {
     return { high: hi, low: lo };
   }, [filteredData]);
 
-  // Load events for a small date window, normalize to local time (no 'Z')
   useEffect(() => {
     const run = async () => {
       const today = new Date();
@@ -53,7 +128,7 @@ export default function TrendWindow() {
           const dateStr = dates[i];
           const list = res.value.data.map((e) => ({
             ...e,
-            fullEventDate: new Date(`${dateStr}T${e.time || '00:00'}:00`), // local time
+            fullEventDate: new Date(`${dateStr}T${e.time || '00:00'}:00`),
           }));
           all.push(...list);
         }
@@ -66,7 +141,9 @@ export default function TrendWindow() {
     run();
   }, []);
 
-  const currentPrice = filteredData.at(-1)?.close || 0;
+  const currentPrice = filteredData.length
+    ? filteredData[filteredData.length - 1].close || 0
+    : 0;
 
   return (
     <div className={windowStyles.trendWindow}>
@@ -81,7 +158,6 @@ export default function TrendWindow() {
               economicEvents={economicEvents}
             />
           </div>
-
           <div className={windowStyles.price_bar_container}>
             <div className={windowStyles.spacer}>
               <input
@@ -96,9 +172,11 @@ export default function TrendWindow() {
                 className={windowStyles.input}
               />
             </div>
-
-            <PriceBar currentPrice={currentPrice} scale={scale} />
-
+            <PriceBar
+              marketData={filteredData}
+              currentPrice={currentPrice}
+              selectedHours={selectedHours}
+            />
             <div className={windowStyles.spacer} />
           </div>
         </>

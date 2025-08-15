@@ -8,40 +8,39 @@ import IndicatorsContainer from '../Indicators/IndicatorContainer';
 import EventMarker from '../EventsMarker/EventMarker';
 import chartStyles from './styles/TrendChart.module.css';
 
-const minuteStrFromAny = (t) => {
-  if (typeof t === 'string') return t.slice(0, 16); // YYYY-MM-DDTHH:MM
-  const d = t instanceof Date ? t : new Date(t);
+const minuteKey = (t) => {
+  if (typeof t === 'string') return t.slice(0, 16);
+  const d = new Date(t);
   const p2 = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(
     d.getHours(),
   )}:${p2(d.getMinutes())}`;
 };
 
-const parseLocalMinuteStr = (s /* 'YYYY-MM-DDTHH:MM' */) => {
-  const [date, hm] = s.split('T');
-  const [Y, M, D] = date.split('-').map(Number);
+const parseLocalMinute = (s) => {
+  const [d, hm] = s.split('T');
+  const [Y, M, D] = d.split('-').map(Number);
   const [h, m] = hm.split(':').map(Number);
-  return new Date(Y, M - 1, D, h, m, 0, 0); // local date with those wall-clock values
+  return new Date(Y, M - 1, D, h, m, 0, 0);
 };
 
-const formatLocalMinute = (d) => {
+const fmtLocalMinute = (d) => {
   const p2 = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(
     d.getHours(),
   )}:${p2(d.getMinutes())}`;
 };
 
-const buildTimelineMinuteKeys = (data, futureMinutes = 60) => {
+const buildTimeline = (data, futureMinutes = 60) => {
   if (!data?.length) return [];
-  const firstKey = minuteStrFromAny(data[0].time);
-  const lastKey = minuteStrFromAny(data[data.length - 1].time);
-  const start = parseLocalMinuteStr(firstKey);
-  const end = parseLocalMinuteStr(lastKey);
-  const endPlus = new Date(end.getTime() + futureMinutes * 60_000);
+  const first = minuteKey(data[0].time);
+  const last = minuteKey(data[data.length - 1].time);
+  const start = parseLocalMinute(first);
+  const end = parseLocalMinute(last);
+  const endPlus = new Date(end.getTime() + futureMinutes * 60000);
   const out = [];
-  for (let t = start.getTime(); t <= endPlus.getTime(); t += 60_000) {
-    out.push(formatLocalMinute(new Date(t)));
-  }
+  for (let t = start.getTime(); t <= endPlus.getTime(); t += 60000)
+    out.push(fmtLocalMinute(new Date(t)));
   return out;
 };
 
@@ -53,6 +52,7 @@ export const TrendChart = ({
 }) => {
   const chartRef = useRef(null);
   const { isCrosshairActive, setIsCrosshairActive } = useToolContext();
+
   const [crosshair, setCrosshair] = useState({ x: null, y: null, visible: false });
   const [hoveredCandle, setHoveredCandle] = useState(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -60,30 +60,39 @@ export const TrendChart = ({
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
 
+  const dataDedup = useMemo(() => {
+    const m = new Map();
+    for (const c of data) if (c?.time) m.set(minuteKey(c.time), c);
+    return Array.from(m.values()).sort((a, b) => new Date(a.time) - new Date(b.time));
+  }, [data]);
+
   const high = scale?.high ?? 0;
   const low = scale?.low ?? 0;
   const range = Math.max(1e-9, high - low);
 
-  // Timeline minute keys: from first candle minute to last + 60 minutes
-  const minuteKeys = useMemo(() => buildTimelineMinuteKeys(data, 60), [data]);
+  // define minuteKeys first
+  const minuteKeys = useMemo(() => buildTimeline(dataDedup, 60), [dataDedup]);
 
-  // Map data by minute for slot rendering
+  // then define keyToIndex
+  const keyToIndex = useMemo(
+    () => new Map(minuteKeys.map((k, i) => [k, i])),
+    [minuteKeys],
+  );
+
   const dataByMinute = useMemo(() => {
     const m = new Map();
-    for (const c of data) m.set(minuteStrFromAny(c.time), c);
+    for (const c of dataDedup) m.set(minuteKey(c.time), c);
     return m;
-  }, [data]);
+  }, [dataDedup]);
 
-  // Events grouped by minute index on the extended timeline
   const eventsByIndex = useMemo(() => {
     if (!economicEvents?.length || !minuteKeys.length) return new Map();
     const timeToIndex = new Map(minuteKeys.map((k, i) => [k, i]));
     const grouped = new Map();
     const order = { High: 0, Medium: 1, Low: 2 };
-
     for (const ev of economicEvents) {
       if (!ev.fullEventDate) continue;
-      const k = minuteStrFromAny(ev.fullEventDate);
+      const k = minuteKey(ev.fullEventDate);
       const idx = timeToIndex.get(k);
       if (idx == null) continue;
       if (!grouped.has(idx)) grouped.set(idx, []);
@@ -93,15 +102,23 @@ export const TrendChart = ({
     }
     return grouped;
   }, [economicEvents, minuteKeys]);
-
-  // Auto-scroll to the end when data changes unless user scrolled
+  // Auto-scroll only when timeline grows
+  const prevLenRef = useRef(0);
   useEffect(() => {
-    if (!chartRef.current || userScrolled) return;
-    const el = chartRef.current;
-    const id = requestAnimationFrame(() => {
-      el.scrollLeft = el.scrollWidth;
-    });
-    return () => cancelAnimationFrame(id);
+    if (!chartRef.current) return;
+    if (userScrolled) {
+      prevLenRef.current = minuteKeys.length;
+      return;
+    }
+    if (minuteKeys.length > prevLenRef.current) {
+      prevLenRef.current = minuteKeys.length;
+      const el = chartRef.current;
+      const id = requestAnimationFrame(() => {
+        el.scrollLeft = el.scrollWidth;
+      });
+      return () => cancelAnimationFrame(id);
+    }
+    prevLenRef.current = minuteKeys.length;
   }, [minuteKeys, userScrolled]);
 
   const handleUserScroll = useCallback(() => {
@@ -111,7 +128,6 @@ export const TrendChart = ({
   useEffect(() => {
     const chartEl = chartRef.current;
     if (!chartEl) return;
-
     const onWheel = (e) => {
       requestAnimationFrame(() => {
         chartEl.scrollLeft += e.deltaX * 2;
@@ -119,7 +135,6 @@ export const TrendChart = ({
         handleUserScroll();
       });
     };
-
     chartEl.addEventListener('wheel', onWheel, { passive: false });
     return () => chartEl.removeEventListener('wheel', onWheel);
   }, [handleUserScroll]);
@@ -131,14 +146,12 @@ export const TrendChart = ({
     setStartX(e.pageX - el.offsetLeft);
     setScrollLeft(el.scrollLeft);
   };
-
   const onMouseMoveDrag = (e) => {
     if (!isDragging || !chartRef.current) return;
     e.preventDefault();
     const x = e.pageX - chartRef.current.offsetLeft;
     chartRef.current.scrollLeft = scrollLeft - (x - startX) * 2;
   };
-
   const onMouseUp = () => setIsDragging(false);
   const onMouseLeaveDrag = () => setIsDragging(false);
 
@@ -173,7 +186,7 @@ export const TrendChart = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [setIsCrosshairActive]);
 
-  const labelHHMM = useCallback((k) => k.slice(11, 16), []); // from minute key
+  const labelHHMM = useCallback((k) => k.slice(11, 16), []);
 
   return (
     <div
@@ -185,7 +198,6 @@ export const TrendChart = ({
       <div className={chartStyles.chart_ticker}>
         <div className={chartStyles.ticker_flex}>EURUSD</div>
       </div>
-
       <div
         className={`${chartStyles.chart_container} ${
           isDragging ? chartStyles.dragging : ''
@@ -219,7 +231,6 @@ export const TrendChart = ({
               />
             );
           })}
-
           {isCrosshairActive && crosshair.visible && (
             <div className={chartStyles.crosshair_overlay}>
               <div
@@ -232,7 +243,6 @@ export const TrendChart = ({
               />
             </div>
           )}
-
           {hoveredCandle && isCrosshairActive && crosshair.visible && (
             <TooltipCandle
               x={crosshair.x}
@@ -242,7 +252,6 @@ export const TrendChart = ({
             />
           )}
         </div>
-
         <div className={chartStyles.timeline_container}>
           <div className={chartStyles.times}>
             {minuteKeys.map((k, idx) => (
@@ -256,7 +265,6 @@ export const TrendChart = ({
               </div>
             ))}
           </div>
-
           <div className={chartStyles.events_overlay}>
             {Array.from(eventsByIndex.entries()).map(([index, events]) => (
               <div
@@ -272,12 +280,14 @@ export const TrendChart = ({
           </div>
         </div>
       </div>
-
       <IndicatorsContainer
-        marketData={data}
+        marketData={dataDedup}
         chartRef={chartRef}
         highPrice={high}
         lowPrice={low}
+        timelineKeys={minuteKeys}
+        candleWidth={candleWidth}
+        keyToIndex={keyToIndex}
       />
     </div>
   );
@@ -295,10 +305,8 @@ const Candle = React.memo(({ candle, high, low, range, width }) => {
   const close = candle.close ?? 0;
   const highP = candle.high ?? 0;
   const lowP = candle.low ?? 0;
-
   const bodyHeight = Math.abs(close - open);
   const wickHeight = highP - lowP;
-
   return (
     <div className={chartStyles.candle} style={{ width }}>
       <div
@@ -320,9 +328,7 @@ const Candle = React.memo(({ candle, high, low, range, width }) => {
     </div>
   );
 });
-
 Candle.displayName = 'Candle';
-
 Candle.propTypes = {
   candle: PropTypes.shape({
     time: PropTypes.string.isRequired,
@@ -336,5 +342,4 @@ Candle.propTypes = {
   range: PropTypes.number.isRequired,
   width: PropTypes.number,
 };
-
 export default TrendChart;

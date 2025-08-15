@@ -3,55 +3,32 @@ import PropTypes from 'prop-types';
 import styles from './styles/SMA.module.css';
 import { useApi } from '../../context/ApiContext';
 
-const SMAChart = ({ marketData, highPrice, lowPrice }) => {
+const SMAChart = ({ marketData, highPrice, lowPrice, timelineKeys }) => {
   const { smaData } = useApi();
 
-  const alignedSmaData = useMemo(() => {
-    if (!Array.isArray(smaData) || !smaData.length || !marketData.length) {
+  const aligned = useMemo(() => {
+    if (!Array.isArray(smaData) || !smaData.length || !Array.isArray(timelineKeys))
       return [];
-    }
-
-    // The API sends data newest-first, but the chart displays oldest-first.
-    const reversedSmaData = [...smaData].reverse();
-
-    // Create a Map for fast lookups of SMA data by its timestamp.
-    const smaDataMap = new Map(
-      reversedSmaData.map((item) => [new Date(item.time).getTime(), item]),
-    );
-
-    // Iterate over the main marketData array. For each candle, find the
-    // corresponding SMA data. If it doesn't exist, use null.
-    return marketData.map((candle) => {
-      const candleTime = new Date(candle.time).getTime();
-      return smaDataMap.get(candleTime) || null;
-    });
-  }, [smaData, marketData]);
+    const map = new Map(smaData.map((p) => [String(p.time).slice(0, 16), p.value]));
+    return timelineKeys.map((k) => (map.has(k) ? { time: k, value: map.get(k) } : null));
+  }, [smaData, timelineKeys]);
 
   return (
     <div className={styles.smaContainer}>
-      {marketData.length > 0 ? (
-        <div className={styles.smaChart}>
-          {alignedSmaData.map((sma, idx) => {
-            if (!sma) {
-              return <div key={idx} className={styles.smaPointEmpty} />;
-            }
-
-            const relY = ((sma.value - lowPrice) / (highPrice - lowPrice)) * 100;
-            return (
-              <div
-                key={idx}
-                className={styles.smaPoint}
-                style={{
-                  bottom: `${relY}%`,
-                  left: `${(idx / marketData.length) * 100}%`,
-                }}
-              />
-            );
-          })}
-        </div>
-      ) : (
-        <p className={styles.noData}>Loading</p>
-      )}
+      <div className={styles.smaChart}>
+        {aligned.map((pt, idx) => {
+          if (!pt || highPrice === lowPrice)
+            return <div key={idx} className={styles.smaPointEmpty} />;
+          const relY = ((pt.value - lowPrice) / (highPrice - lowPrice)) * 100;
+          return (
+            <div
+              key={idx}
+              className={styles.smaPoint}
+              style={{ bottom: `${relY}%`, left: `${(idx / aligned.length) * 100}%` }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 };

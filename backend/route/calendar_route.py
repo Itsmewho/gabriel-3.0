@@ -23,9 +23,6 @@ def get_economic_calendar() -> Union[Response, Tuple[Response, int]]:
             [date],
         )
 
-        if not rows or len(rows) == 0:
-            return jsonify({"error": f"No events found for {date}"}), 404
-
         result: List[Dict[str, Any]] = []
         for row in rows:
             try:

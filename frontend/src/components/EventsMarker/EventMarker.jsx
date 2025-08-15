@@ -49,7 +49,6 @@ EventMarker.propTypes = {
     event: PropTypes.string,
     time: PropTypes.string,
     currency: PropTypes.string,
-    actual: PropTypes.number,
     forecast: PropTypes.number,
     previous: PropTypes.number,
   }).isRequired,
