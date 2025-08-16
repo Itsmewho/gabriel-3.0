@@ -8,7 +8,7 @@ from random import random
 from datetime import datetime, timezone, timedelta
 
 sys.path.append("../")
-from api.dwx_client import dwx_client
+from DWX.python.api.dwx_client import dwx_client
 
 
 """
@@ -151,7 +151,7 @@ class TickProcessor:
             )
 
 
-mt4_files_path = "C:/Users/Administrator/AppData/Roaming/MetaQuotes/Terminal/3B534B10135CFEDF8CD1AAB8BD994B13/MQL4/Files/"
+mt4_files_path = "C:/Users/Itsme/AppData/Roaming/MetaQuotes/Terminal/73B7A2420D6397DFF9014A20F1201F97/MQL5/Files/"
 processor = TickProcessor(mt4_files_path)
 
 while processor.dwx.ACTIVE:
