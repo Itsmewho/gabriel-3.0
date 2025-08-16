@@ -32,12 +32,37 @@ def fetch_records(
         return []
 
 
+def fetch_sql_market_data(symbol, timeframe, where_clause: Optional[str] = None):
+    table_name = f"market_data.{symbol.lower()}_{timeframe}"
+    logger.info(f"Fetching base market data from {table_name}...")
+    try:
+        data = fetch_records(table_name, where_clause=where_clause)
+    except Exception as e:
+        logger.error(f"Database error fetching market data: {e}")
+        return pd.DataFrame()
+
+    if not data:
+        logger.error(f"No SQL data found for {symbol} {timeframe}.")
+        return pd.DataFrame()
+
+    columns = [
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "tick_volume",
+        "change",
+        "change_percent",
+    ]
+    return pd.DataFrame(data, columns=columns)
+
+
 # --- ECONOMIC EVENT FEATURES ---
 def fetch_event_features(symbol, candles_df):
     if candles_df.empty:
         return candles_df
 
-    # logger.info("Fetching and processing economic event features...")
     base, quote = symbol[:3], symbol[3:]
     raw_events = fetch_records(
         "public.economic_events",
@@ -77,7 +102,6 @@ def fetch_event_features(symbol, candles_df):
     df_events.dropna(subset=["time"], inplace=True)
     df_events.sort_values("time", inplace=True)
     df_events.rename(columns={"time": "event_time_actual"}, inplace=True)
-
     df_events["impact_score"] = (
         df_events["impact"]
         .map(
@@ -96,8 +120,9 @@ def fetch_event_features(symbol, candles_df):
 
     candles_df["time"] = pd.to_datetime(candles_df["time"], utc=True)
 
+    # Perform the asof merge
     pre_event_df = pd.merge_asof(
-        left=candles_df,
+        left=candles_df.sort_values("time"),
         right=df_events,
         left_on="time",
         right_on="event_time_actual",
@@ -105,13 +130,16 @@ def fetch_event_features(symbol, candles_df):
         tolerance=pd.Timedelta(minutes=30),
     )
     post_event_df = pd.merge_asof(
-        left=candles_df,
+        left=candles_df.sort_values("time"),
         right=df_events,
         left_on="time",
         right_on="event_time_actual",
         direction="forward",
         tolerance=pd.Timedelta(minutes=30),
     )
+
+    pre_event_df.index = candles_df.index
+    post_event_df.index = candles_df.index
 
     for col, default in get_event_column_defaults().items():
         candles_df[col] = default
@@ -134,7 +162,6 @@ def fetch_event_features(symbol, candles_df):
         "event_name": "event_name",
         "currency": "event_currency",
     }
-
     for source_col, dest_col in column_mapping.items():
         if source_col in post_event_df.columns:
             candles_df.loc[post_mask, dest_col] = post_event_df.loc[

@@ -131,7 +131,7 @@ def run_continuous_data_pipeline():
         end_time = time.time()
         elapsed = end_time - start_time
         print(f"{green}--- Cycle finished in {elapsed:.2f}s. ---{reset}")
-        sleep_until_next_aligned_minute(offset_seconds=2)
+        sleep_until_next_aligned_minute(offset_seconds=1)
 
 
 if __name__ == "__main__":

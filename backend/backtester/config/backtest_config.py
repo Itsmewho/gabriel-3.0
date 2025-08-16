@@ -1,3 +1,5 @@
+# Remember 1pip = 0.0001 (1.12345 + 10 pips = 1.12355)
+
 BACKTEST_CONFIG = {
     # Core
     "INITIAL_BALANCE": 5000.00,
@@ -19,14 +21,16 @@ BACKTEST_CONFIG = {
     "VOLUME_STEP": 0.01,
     "VOLUME_MIN": 0.01,
     "STOP_OUT_LEVEL_PCT": 50.0,  # typical broker stop-out 30–50%
-    "ENTRY_MARGIN_BUFFER_PCT": 120.0,  # don't open if proj. ML < buffer
+    "ENTRY_MARGIN_BUFFER_PCT": 120.0,
     "MAX_CONCURRENT_TRADES": 3,  # per strategy (mirrors live)
     # Trade management
     "USE_TRAILING_STOP": True,
-    "TRAILING_STOP_DISTANCE_POINTS": 10,
+    "TRAILING_STOP_DISTANCE_PIPS": 10,
     "USE_BREAK_EVEN_STOP": True,
-    "BE_TRIGGER_PIPS": 5,
-    "BE_OFFSET_PIPS": 2,
+    "BE_TRIGGER_PIPS": 10,  # BE Trigger need to be lower then be_offset_pips
+    "BE_OFFSET_PIPS": 20,
+    "BEFORE_EVENT": 30,
+    "AFTER_EVENT": 30,
     # Slippage
     "USE_SLIPPAGE": True,
     "MIN_SLIPPAGE_PIPS": 0.1,
