@@ -9,7 +9,7 @@ from flask import send_from_directory
 from automation.run_historic_trend import run_continuous_data_pipeline
 from automation.run_data_pipeline import run_data_pipeline
 
-from trend.current_candle import RealTimeCandleBuilder
+from candle.current_candle import RealTimeCandleBuilder
 from services.DWXhandler import start_dwx_client_thread
 
 
