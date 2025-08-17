@@ -33,17 +33,6 @@ class Trade:
     ts_activated: bool = False
 
 
-@dataclass
-class PendingOrder:
-    side: str
-    entry_price: float
-    sl: Optional[float]
-    tp: Optional[float]
-    time: Any
-    lot_size: float
-    fill_at_index: int
-
-
 class OrderEngine:
     def __init__(self, symbol: str, config: Dict[str, Any], pip_size: float = 0.0001):
         self.symbol = symbol
@@ -257,7 +246,6 @@ class OrderEngine:
             if already_at_risk + proposed_risk > cap_cash and proposed_risk > 0:
                 remaining = max(0.0, cap_cash - already_at_risk)
                 lots = self._round_volume(lots * (remaining / proposed_risk))
-                cap_applied = True
 
         # 3) Margin-aware resizing
         needed_margin = lots * self.margin_per_lot
@@ -265,7 +253,6 @@ class OrderEngine:
             if self.resize_to_free_margin and self.margin_per_lot > 0:
                 lots = self._round_volume(free_margin / self.margin_per_lot)
                 needed_margin = lots * self.margin_per_lot
-                resized_for_margin = True
             if needed_margin > free_margin or lots < self.volume_min:
                 self.insufficient_funds_attempts += 1
                 return

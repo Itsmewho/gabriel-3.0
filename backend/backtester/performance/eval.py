@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import os
 import numpy as np
 import pandas as pd
 from typing import Optional, Dict, Any
@@ -38,6 +39,34 @@ def _cagr(equity_ts: pd.Series) -> float:
     delta_days = (equity_ts.index[-1] - equity_ts.index[0]).days  # type: ignore
     years = max(delta_days / 365.25, 1 / 365.25)
     return float((end_val / start_val) ** (1 / years) - 1)
+
+
+def export_risk_audit(
+    engine, out_path: str = "results/risk_audit.csv", append: bool = False
+) -> str | None:
+    """Write per-trade risk audit to CSV.
+    - engine.risk_audit is a list of dicts produced by OrderEngine.
+    - Creates parent dir. Optionally appends to existing file.
+    Returns path or None when no rows.
+    """
+    rows = getattr(engine, "risk_audit", None)
+    if not rows:
+        return None
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    df = pd.DataFrame(rows)
+    if append and os.path.exists(out_path):
+        try:
+            prev = pd.read_csv(out_path)
+            # Align columns before concat
+            for c in set(prev.columns) - set(df.columns):
+                df[c] = pd.NA
+            for c in set(df.columns) - set(prev.columns):
+                prev[c] = pd.NA
+            df = pd.concat([prev, df], ignore_index=True)
+        except Exception:
+            pass
+    df.to_csv(out_path, index=False)
+    return out_path
 
 
 # --- Public API ---
@@ -92,13 +121,13 @@ def get_performance_report(
             (cagr / (max_drawdown_pct / 100)) if max_drawdown_pct > 0 else float("inf")
         )
 
-    # --- MODIFIED: Refined Stop Loss Counters ---
-    sl_exits = history_df[history_df["exit_reason"] == "Stop Loss"]
-    losing_sl_hits = len(sl_exits[sl_exits["pnl"] < 0])
-    profitable_ts_hits = len(sl_exits[sl_exits["pnl"] >= 0])
-    # --- END MODIFICATION ---
-
+    # --- Refined Stop Loss Counters ---
+    losing_sl_hits = len(history_df[history_df["exit_reason"] == "Stop Loss"])
+    profitable_ts_hits = len(
+        history_df[history_df["exit_reason"].isin(["Trailing Stop", "Break-Even"])]
+    )
     tp_hits = len(history_df[history_df["exit_reason"] == "Take Profit"])
+
     be_activations = (
         int(history_df["be_activated"].sum())
         if "be_activated" in history_df.columns
@@ -162,9 +191,6 @@ def print_performance_report(self, report: Dict[str, Any]):
     )
     print(f"Net Profit/Loss: ${report['net_profit']:.2f}")
     print(
-        f"Total Trades: {report['total_trades']}, Win Rate: {report['win_rate']:.2f}%, Profit Factor: {report['profit_factor']:.2f}"
-    )
-    print(
         f"Maximum Drawdown: ${report['max_drawdown_abs']:.2f} ({report['max_drawdown_pct']:.2f}%)"
     )
     print(
@@ -187,6 +213,11 @@ def print_performance_report(self, report: Dict[str, Any]):
     print(f"Max Concurrent Trades: {report['max_concurrent_trades']}")
     print("-" * 35)
     print("--- Trade Exit & Risk Events ---")
+    print("-" * 35)
+    print(
+        f"Total Trades: {report['total_trades']}, Win Rate: {report['win_rate']:.2f}%, Profit Factor: {report['profit_factor']:.2f}"
+    )
+    print("-" * 35)
     print(f"Losing SL Hits: {report.get('losing_sl_hits', 0)}")
     print(f"Profitable Trailing SL Hits: {report.get('profitable_ts_hits', 0)}")
     print(f"Take Profit Hits: {report.get('tp_hits', 0)}")
@@ -237,7 +268,7 @@ def plot_equity_curve(self, report: Dict[str, Any]):
         filepath = results_path / f"{base_filename}_{file_suffix}.png"
         plt.savefig(filepath)
         plt.close()
-        logger.info(f"Equity curve plot saved to {filepath}")
+        # logger.info(f"Equity curve plot saved to {filepath}")
 
     # 1. Plot the full curve
     _save_plot(equity_df, "Full Period", "full")
@@ -266,3 +297,7 @@ def plot_equity_curve(self, report: Dict[str, Any]):
         last_month_start = end_date - pd.DateOffset(months=1)
         last_month_df = equity_df[equity_df.index >= last_month_start]
         _save_plot(last_month_df, "Last Month", "last_month")
+
+    # 5. Save audit svg
+    slug = strategy_name.lower().replace(" ", "_")
+    export_risk_audit(self, f"results/{slug}_risk_audit.csv")

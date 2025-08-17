@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from .base_strat import BaseStrategy
 
 REQUIRED_ANY_LONG: List[str] = [
@@ -22,112 +22,161 @@ REQUIRED_ANY_SHORT: List[str] = [
 
 
 class ICTStrategy(BaseStrategy):
-    """Rule-based ICT scaffold. No look-ahead.
-
-    Long idea (precise but simple):
-      - Liquidity sweep of lows (sweep_dn == 1)
-      - AND either bullish FVG active with mid tag OR bullish OB mitigated
-      - Optional premium/discount: prefer discount (in_discount == 1) if available
-
-    Short idea:
-      - Liquidity sweep of highs (sweep_up == 1)
-      - AND either bearish FVG active with mid tag OR bearish OB mitigated
-      - Optional premium/discount: prefer premium (in_premium == 1) if available
-
-    Filters:
-      - allowed_sessions via session_id
-      - event_block_minutes via event_minutes_to_event
-    """
-
     def __init__(self, symbol: str, config: Dict[str, Any]):
         super().__init__(symbol, config)
-        # Risk params
-        self.sl_pips = float(config.get("sl_pips", 12))
-        self.tp_pips = float(config.get("tp_pips", 36))
-        # Filters
-        self.allowed_sessions = set(config.get("allowed_sessions", []))
-        self.event_block_minutes = int(config.get("event_block_minutes", 0))
-        self.require_discount_premium = bool(
-            config.get("require_discount_premium", False)
-        )
-        # Use mid-tag or OB mitigation as confirmation
+        self.sl_pips = float(config.get("sl_pips", 95))
+        self.tp_pips = float(config.get("tp_pips", 320))
+        self.use_trailing = bool(config.get("USE_TRAILING_STOP", False))
+        self.trail_dist_pips = float(config.get("TRAILING_STOP_DISTANCE_PIPS", 110))
+        self.use_be = bool(config.get("USE_BREAK_EVEN_STOP", False))
+        self.be_trigger_pips = float(config.get("BE_TRIGGER_PIPS", 42))
+        self.be_offset_pips = float(config.get("BE_OFFSET_PIPS", 10))
+        self.require_atr_guard = bool(config.get("require_atr_guard", True))
         self.require_mid_or_ob = bool(config.get("require_mid_or_ob", True))
+        self.require_discount_premium = bool(
+            config.get("require_discount_premium", True)
+        )
+        self.block_near_pdh_pdl = bool(config.get("block_near_pdh_pdl", True))
+        self.fresh_confirm_bars = int(config.get("fresh_confirm_bars", 1))
+        self.one_trade_per_swing = bool(config.get("one_trade_per_swing", True))
+        # Track state
+        self._last_sweep = 0  # 1=up, -1=down, 0=none
+        self._prev_day = None
+        self._pdh = None  # previous day's high
+        self._pdl = None  # previous day's low
+        self._day_high = None
+        self._day_low = None
 
-    # --- helpers ---
-    def _cols_exist(self, data: pd.DataFrame, cols: List[str]) -> bool:
-        return all(c in data.columns for c in cols)
+    def _update_daily_levels(self, t: pd.Timestamp, high: float, low: float):
+        d = t.date()
+        if self._prev_day is None:
+            self._prev_day = d
+            self._day_high = high
+            self._day_low = low
+            return
+        if d != self._prev_day:
+            # rollover: yesterday's H/L become PDH/PDL
+            self._pdh, self._pdl = self._day_high, self._day_low
+            self._day_high, self._day_low = high, low
+            self._prev_day = d
+        else:
+            self._day_high = max(self._day_high or high, high)
+            self._day_low = min(self._day_low or low, low)
 
-    def _session_ok(self, row: pd.Series) -> bool:
-        if not self.allowed_sessions:
-            return True
-        sid = row.get("session_id")
-        if pd.isna(sid):
+    def _near_pdh_pdl(self, price: float, atr: float) -> bool:
+        if not self.block_near_pdh_pdl:
             return False
-        return int(sid) in self.allowed_sessions
+        if self._pdh is None or self._pdl is None or atr is None or atr == 0:
+            return False
+        tol = 0.25 * float(atr)
+        return (abs(price - float(self._pdh)) <= tol) or (
+            abs(price - float(self._pdl)) <= tol
+        )
 
-    def _event_ok(self, row: pd.Series) -> bool:
-        if self.event_block_minutes <= 0:
+    def _fresh_confirm(self, curr: pd.Series, prev: Optional[pd.Series]):
+        if not self.require_mid_or_ob:
             return True
-        m = row.get("event_minutes_to_event")
-        if m is None or pd.isna(m):
+        mid_ok = (
+            int(curr.get("fvg_up_active", 0)) == 1
+            and int(curr.get("fvg_up_mid_tag", 0)) == 1
+        )
+        ob_ok = (
+            int(curr.get("ob_bull_active", 0)) == 1
+            and int(curr.get("ob_bull_mitigated", 0)) == 1
+        )
+        if mid_ok or ob_ok:
             return True
-        return abs(float(m)) > self.event_block_minutes
+        if self.fresh_confirm_bars >= 1 and prev is not None:
+            mid_ok_p = (
+                int(prev.get("fvg_up_active", 0)) == 1
+                and int(prev.get("fvg_up_mid_tag", 0)) == 1
+            )
+            ob_ok_p = (
+                int(prev.get("ob_bull_active", 0)) == 1
+                and int(prev.get("ob_bull_mitigated", 0)) == 1
+            )
+            return mid_ok_p or ob_ok_p
+        return False
 
-    def _discount_ok(self, row: pd.Series, long: bool) -> bool:
-        if not self.require_discount_premium:
+    def _fresh_confirm_short(self, curr: pd.Series, prev: Optional[pd.Series]):
+        if not self.require_mid_or_ob:
             return True
-        flag = row.get("in_discount") if long else row.get("in_premium")
-        if flag is None or pd.isna(flag):
-            return True  # do not block if feature absent
-        return bool(int(flag) == 1)
+        mid_ok = (
+            int(curr.get("fvg_dn_active", 0)) == 1
+            and int(curr.get("fvg_dn_mid_tag", 0)) == 1
+        )
+        ob_ok = (
+            int(curr.get("ob_bear_active", 0)) == 1
+            and int(curr.get("ob_bear_mitigated", 0)) == 1
+        )
+        if mid_ok or ob_ok:
+            return True
+        if self.fresh_confirm_bars >= 1 and prev is not None:
+            mid_ok_p = (
+                int(prev.get("fvg_dn_active", 0)) == 1
+                and int(prev.get("fvg_dn_mid_tag", 0)) == 1
+            )
+            ob_ok_p = (
+                int(prev.get("ob_bear_active", 0)) == 1
+                and int(prev.get("ob_bear_mitigated", 0)) == 1
+            )
+            return mid_ok_p or ob_ok_p
+        return False
 
-    # --- core ---
     def generate_signals(self, data: pd.DataFrame):
         if not self.backtester or len(data) < 2:
             return
-        curr = data.iloc[-1]
+        prev, curr = data.iloc[-2], data.iloc[-1]
 
-        if not self._session_ok(curr) or not self._event_ok(curr):
+        # Update daily levels for PDH/PDL tracking
+        t = pd.to_datetime(curr["time"]) if "time" in curr else pd.Timestamp.utcnow()
+        self._update_daily_levels(
+            t,
+            float(curr.get("high", curr.get("close", 0))),
+            float(curr.get("low", curr.get("close", 0))),
+        )
+
+        if self.require_atr_guard and int(curr.get("atr_guard_ok", 0)) != 1:
             return
 
+        atr = float(curr.get("atr", 0) or 0)
+        price = float(curr["close"])
+
         # Long setup
-        can_long = "sweep_dn" in data.columns and int(curr.get("sweep_dn", 0)) == 1
-        if can_long:
-            confirm_long = True
-            if self.require_mid_or_ob:
-                mid_ok = (
-                    int(curr.get("fvg_up_active", 0)) == 1
-                    and int(curr.get("fvg_up_mid_tag", 0)) == 1
-                )
-                ob_ok = (
-                    int(curr.get("ob_bull_active", 0)) == 1
-                    and int(curr.get("ob_bull_mitigated", 0)) == 1
-                )
-                confirm_long = mid_ok or ob_ok
-            if confirm_long and self._discount_ok(curr, True):
-                price = float(curr["close"])
-                sl = price - (self.sl_pips * self.pip_size)
-                tp = price + (self.tp_pips * self.pip_size)
-                self.backtester.open_trade("buy", price, sl, tp, curr["time"])
+        if int(curr.get("sweep_dn", 0)) == 1:
+            if self.one_trade_per_swing and self._last_sweep == -1:
                 return
+            if not self._fresh_confirm(curr, prev):
+                return
+            if self.require_discount_premium and int(curr.get("in_discount", 0)) != 1:
+                return
+            if self._near_pdh_pdl(price, atr):
+                return
+            self._last_sweep = -1
+            self.backtester.open_trade(
+                "buy",
+                price,
+                price - self.sl_pips * self.pip_size,
+                price + self.tp_pips * self.pip_size,
+                curr["time"],
+            )
+            return
 
         # Short setup
-        can_short = "sweep_up" in data.columns and int(curr.get("sweep_up", 0)) == 1
-        if can_short:
-            confirm_short = True
-            if self.require_mid_or_ob:
-                mid_ok = (
-                    int(curr.get("fvg_dn_active", 0)) == 1
-                    and int(curr.get("fvg_dn_mid_tag", 0)) == 1
-                )
-                ob_ok = (
-                    int(curr.get("ob_bear_active", 0)) == 1
-                    and int(curr.get("ob_bear_mitigated", 0)) == 1
-                )
-                confirm_short = mid_ok or ob_ok
-            if confirm_short and self._discount_ok(curr, False):
-                price = float(curr["close"])
-                sl = price + (self.sl_pips * self.pip_size)
-                tp = price - (self.tp_pips * self.pip_size)
-                self.backtester.open_trade("sell", price, sl, tp, curr["time"])
+        if int(curr.get("sweep_up", 0)) == 1:
+            if self.one_trade_per_swing and self._last_sweep == 1:
                 return
+            if not self._fresh_confirm_short(curr, prev):
+                return
+            if self.require_discount_premium and int(curr.get("in_premium", 0)) != 1:
+                return
+            if self._near_pdh_pdl(price, atr):
+                return
+            self._last_sweep = 1
+            self.backtester.open_trade(
+                "sell",
+                price,
+                price + self.sl_pips * self.pip_size,
+                price - self.tp_pips * self.pip_size,
+                curr["time"],
+            )

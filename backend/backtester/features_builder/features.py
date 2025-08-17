@@ -123,18 +123,18 @@ def build_gaussian_channel(
 def build_features(
     df: pd.DataFrame,
     *,
-    ema_fast: int = 14,
-    ema_slow: int = 30,
-    sma_fast: int = 5,
-    sma_slow: int = 50,
-    sma_trend: int = 14,
-    rsi_len: int = 14,
-    macd_fast: int = 12,
-    macd_slow: int = 26,
-    macd_sig: int = 9,
-    tenkan_len: int = 9,
-    kijun_len: int = 26,
-    span_b_len: int = 52,
+    ema_fast: int = 14,  # orignal = 14
+    ema_slow: int = 30,  # orginal = 30
+    sma_fast: int = 5,  # org = 5
+    sma_slow: int = 50,  # org = 50
+    sma_trend: int = 14,  # org = 14
+    rsi_len: int = 14,  # org = 14
+    macd_fast: int = 12,  # org = 12
+    macd_slow: int = 26,  # org = 26
+    macd_sig: int = 9,  # org = 9
+    tenkan_len: int = 9,  # org = 9
+    kijun_len: int = 26,  # org = 26
+    span_b_len: int = 52,  # org = 52
     renko_brick_pips: float = 10.0,
     pip_size: float = 0.0001,
     drop_warmup: bool = True,

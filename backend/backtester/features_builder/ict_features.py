@@ -217,12 +217,14 @@ def add_ict_order_blocks(df: pd.DataFrame) -> pd.DataFrame:
 
     for i in range(n):
         # Track most recent opposite bodies
-        is_down = c[i] < o[i]
-        is_up = c[i] > o[i]
+        # --- FIX: Use .iat[] for positional access ---
+        is_down = c.iat[i] < o.iat[i]
+        is_up = c.iat[i] > o.iat[i]
         if is_down:
-            last_down_body = (min(o[i], c[i]), max(o[i], c[i]))
+            last_down_body = (min(o.iat[i], c.iat[i]), max(o.iat[i], c.iat[i]))
         if is_up:
-            last_up_body = (min(o[i], c[i]), max(o[i], c[i]))
+            last_up_body = (min(o.iat[i], c.iat[i]), max(o.iat[i], c.iat[i]))
+        # --- END FIX ---
 
         # On FVG up, set bullish OB from last down body
         if out["fvg_up"].iat[i] == 1 and last_down_body is not None:
@@ -238,10 +240,16 @@ def add_ict_order_blocks(df: pd.DataFrame) -> pd.DataFrame:
             bear_active[i] = 1
 
         # Mitigation check: price trades into the zone
-        if bull_active[i] == 1 and (l[i] <= bull_high[i] and h[i] >= bull_low[i]):
+        # --- FIX: Use .iat[] for positional access ---
+        if bull_active[i] == 1 and (
+            l.iat[i] <= bull_high[i] and h.iat[i] >= bull_low[i]
+        ):
             bull_mitigated[i] = 1
-        if bear_active[i] == 1 and (l[i] <= bear_high[i] and h[i] >= bear_low[i]):
+        if bear_active[i] == 1 and (
+            l.iat[i] <= bear_high[i] and h.iat[i] >= bear_low[i]
+        ):
             bear_mitigated[i] = 1
+        # --- END FIX ---
 
     out["ob_bull_low"] = bull_low
     out["ob_bull_high"] = bull_high

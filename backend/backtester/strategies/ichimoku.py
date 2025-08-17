@@ -9,52 +9,53 @@ class IchimokuStrategy(BaseStrategy):
     def __init__(self, symbol: str, config: Dict[str, Any]):
         super().__init__(symbol, config)
         self.sl_pips = float(config.get("sl_pips", 10))
-        self.tp_pips = float(config.get("tp_pips", 60))
+        self.tp_pips = float(config.get("tp_pips", 50))
+        self.use_trailing = bool(config.get("USE_TRAILING_STOP", False))
+        self.trail_dist_pips = float(config.get("TRAILING_STOP_DISTANCE_PIPS", 100))
+        self.use_be = bool(config.get("USE_BREAK_EVEN_STOP", False))
+        self.be_trigger_pips = float(config.get("BE_TRIGGER_PIPS", 50))
+        self.be_offset_pips = float(config.get("BE_OFFSET_PIPS", 10))
+        self.require_atr_guard = bool(config.get("require_atr_guard", True))
 
     def generate_signals(self, data: pd.DataFrame):
-        if len(data) < 2 or not self.backtester:
+        if not self.backtester or len(data) < 2:
             return
+
         prev, curr = data.iloc[-2], data.iloc[-1]
 
-        is_bullish_cross = (
+        if self.require_atr_guard and curr.get("atr_guard_ok", 1) != 1:
+            return
+
+        bullish = (
             prev["tenkan_sen"] < prev["kijun_sen"]
             and curr["tenkan_sen"] > curr["kijun_sen"]
-        )
-
-        price_above_cloud = (
-            curr["close"] > curr["senkou_span_a_now"]
+            and curr["close"] > curr["senkou_span_a_now"]
             and curr["close"] > curr["senkou_span_b_now"]
+            and curr["close"] > curr["chikou_span"]
         )
 
-        chikou_confirm_bullish = curr["close"] > curr["chikou_span"]
-
-        if is_bullish_cross and price_above_cloud and chikou_confirm_bullish:
-            self.backtester.open_trade(
-                "buy",
-                curr["close"],
-                curr["close"] - (self.sl_pips * self.pip_size),
-                curr["close"] + (self.tp_pips * self.pip_size),
-                curr["time"],
-            )
-
-        is_bearish_cross = (
+        bearish = (
             prev["tenkan_sen"] > prev["kijun_sen"]
             and curr["tenkan_sen"] < curr["kijun_sen"]
-        )
-
-        price_below_cloud = (
-            curr["close"] < curr["senkou_span_a_now"]
+            and curr["close"] < curr["senkou_span_a_now"]
             and curr["close"] < curr["senkou_span_b_now"]
+            and curr["chikou_span"] < curr["close"]
         )
 
-        # This is the standard bearish confirmation.
-        chikou_confirm_bearish = curr["chikou_span"] < curr["close"]
-
-        if is_bearish_cross and price_below_cloud and chikou_confirm_bearish:
+        price = curr["close"]
+        if bullish:
+            self.backtester.open_trade(
+                "buy",
+                price,
+                price - self.sl_pips * self.pip_size,
+                price + self.tp_pips * self.pip_size,
+                curr["time"],
+            )
+        elif bearish:
             self.backtester.open_trade(
                 "sell",
-                curr["close"],
-                curr["close"] + (self.sl_pips * self.pip_size),
-                curr["close"] - (self.tp_pips * self.pip_size),
+                price,
+                price + self.sl_pips * self.pip_size,
+                price - self.tp_pips * self.pip_size,
                 curr["time"],
             )

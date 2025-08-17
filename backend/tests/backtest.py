@@ -24,14 +24,6 @@ from backtester.features_builder.features import (
     add_gaussian_channel,
 )
 
-from backtester.features_builder.ict_features import (
-    add_pivots,
-    add_liquidity_sweeps,
-    add_ict_fvg,
-    add_ict_order_blocks,
-    add_premium_discount,
-)
-
 # ICT + trendline live in their own files per your structure
 from backtester.filters.events import add_event_block
 from backtester.filters.atr import add_atr, add_atr_volatility_guard
@@ -43,9 +35,12 @@ from backtester.strategies.sma import SMACrossoverStrategy
 from backtester.strategies.macd import MACDStrategy
 from backtester.strategies.ichimoku import IchimokuStrategy
 from backtester.strategies.rsi_occilator import RSIOscillatorStrategy
+from backtester.strategies.gaussian import GaussianChannelStrategy
+from backtester.strategies.keltner_renko import KeltnerRenkoStrategy
+from backtester.strategies.renko_ichimoku import RenkoIchimokuStrategy
 from backtester.strategies.ict import ICTStrategy
-from backtester.strategies.macd_filtered import FilteredMACDStrategy
-from backtester.strategies.midnight import MidnightOpenStrategy
+from backtester.strategies.trendline import TrendlineStrategy
+
 
 logger = setup_logger(__name__)
 
@@ -64,9 +59,11 @@ STRATEGY_MAP = {
     "macd": MACDStrategy,
     "ichimoku": IchimokuStrategy,
     "rsi": RSIOscillatorStrategy,
+    "gaussian": GaussianChannelStrategy,
+    "keltner_renko": KeltnerRenkoStrategy,
+    "renko_ichimoku": RenkoIchimokuStrategy,
     "ict": ICTStrategy,
-    "macd_filtered": FilteredMACDStrategy,
-    "midnight_open": MidnightOpenStrategy,
+    "trendline": TrendlineStrategy,
 }
 
 
@@ -82,22 +79,12 @@ def make_strategy(name: str, symbol: str, config: Dict[str, Any]):
 
 # ---------- Default feature pipeline ----------
 def default_feature_pipeline(df: pd.DataFrame, cfg: Dict[str, Any]) -> pd.DataFrame:
-    # --- Standard Features (Existing) ---
     out = build_features(df)
     out = add_keltner_features(out)
     out = add_gaussian_channel(out)
     out = add_keltner_renko_interactions(out)
 
-    # Pivots are required for both ICT sweeps and trendlines
-    out = add_pivots(out, left=3, right=3)
-
-    # ICT Features
-    out = add_liquidity_sweeps(out, swing_left=3, swing_right=3)
-    out = add_ict_fvg(out)
-    out = add_ict_order_blocks(out)
-    out = add_premium_discount(out, swing_left=3, swing_right=3)
-
-    # --- Filters (Existing) ---
+    # Events and ATR guard
     out = fetch_event_features(cfg.get("SYMBOL", "EURUSD"), out)
     out = add_event_block(
         out,
@@ -209,125 +196,25 @@ if __name__ == "__main__":
 
     # 2. Define the list of strategies to test.
     strategies_to_run = [
-        FilteredMACDStrategy(
-            symbol=SYMBOL,
-            config={
-                "name": "MACD Filtered",
-                "sl_pips": 70,  # was 80
-                "tp_pips": 180,  # was 200
-                "require_hist_increase": True,
-                "require_trend_confirmation": True,
-                "require_atr_guard": True,  # <- fix key
-                "only_subzero_cross": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 35,  # + a touch to avoid early BE
-                "BE_OFFSET_PIPS": 6,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 90,
-            },
-        ),
         MACDStrategy(
             symbol=SYMBOL,
-            config={
-                "name": "MACD Crossover",
-                "sl_pips": 70,
-                "tp_pips": 220,  # bring closer; PF ↑, DD ↓
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 30,
-                "BE_OFFSET_PIPS": 6,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 80,
-                "require_atr_guard": True,  # add vol guard in class if not present
-            },
+            config={"name": "MACD Crossover", "sl_pips": 10, "tp_pips": 70},
         ),
         IchimokuStrategy(
             symbol=SYMBOL,
-            config={
-                "name": "Ichimoku Cloud",
-                "sl_pips": 90,
-                "tp_pips": 350,  # was 600; trend keeps getting trailed out
-                "require_atr_guard": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 45,
-                "BE_OFFSET_PIPS": 8,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 120,
-            },
+            config={"name": "Ichimoku Cloud", "sl_pips": 10, "tp_pips": 60},
         ),
         EMACrossoverStrategy(
             symbol=SYMBOL,
-            config={
-                "name": "EMA Crossover",
-                "sl_pips": 55,
-                "tp_pips": 160,
-                "require_slope": True,  # <- correct key
-                "require_atr_guard": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 22,
-                "BE_OFFSET_PIPS": 4,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 65,
-            },
+            config={"name": "EMA Crossover", "sl_pips": 10, "tp_pips": 40},
         ),
         SMACrossoverStrategy(
             symbol=SYMBOL,
-            config={
-                "name": "SMA Crossover",
-                "sl_pips": 55,
-                "tp_pips": 160,
-                "require_slope": True,  # <- correct key
-                "require_atr_guard": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 22,
-                "BE_OFFSET_PIPS": 4,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 65,
-            },
+            config={"name": "SMA Crossover", "sl_pips": 10, "tp_pips": 70},
         ),
         RSIOscillatorStrategy(
             symbol=SYMBOL,
-            config={
-                "name": "RSI Oscillator",
-                "sl_pips": 65,
-                "tp_pips": 180,
-                "require_atr_guard": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 28,
-                "BE_OFFSET_PIPS": 5,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 75,
-            },
-        ),
-        ICTStrategy(
-            symbol=SYMBOL,
-            config={
-                "name": "ICT Liquidity Sweep",
-                "sl_pips": 95,
-                "tp_pips": 320,  # shrink; your PF=0.77 => too wide
-                "require_discount_premium": True,
-                "require_mid_or_ob": True,
-                "require_atr_guard": True,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 42,
-                "BE_OFFSET_PIPS": 10,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 110,
-            },
-        ),
-        MidnightOpenStrategy(
-            symbol=SYMBOL,
-            config={
-                "name": "Midnight Open",
-                "sl_pips": 0,
-                "tp_pips": 0,
-                "entry_hour": 0,
-                "entry_minute": 10,
-                "hold_minutes": 120,
-                "require_atr_guard": True,
-                "require_trend": False,  # revert: keep it dumb; PF was best that way
-                "USE_BREAK_EVEN_STOP": False,
-                "USE_TRAILING_STOP": False,
-            },
+            config={"name": "RSI Oscillator", "sl_pips": 10, "tp_pips": 50},
         ),
     ]
 
