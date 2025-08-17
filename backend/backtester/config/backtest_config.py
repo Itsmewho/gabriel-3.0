@@ -13,7 +13,6 @@ BACKTEST_CONFIG = {
     "SWAP_LONG_POINTS": -9.89,
     "SWAP_SHORT_POINTS": 5.44,
     # Sizing & risk
-    "USE_COMPOUNDING": True,
     "FIXED_TRADE_SIZE_LOTS": 0.05,
     "RISK_PERCENTAGE": 1.0,
     "MAX_LOT_SIZE": 50.0,
@@ -23,7 +22,12 @@ BACKTEST_CONFIG = {
     "STOP_OUT_LEVEL_PCT": 50.0,  # typical broker stop-out 30–50%
     "ENTRY_MARGIN_BUFFER_PCT": 120.0,
     "MAX_CONCURRENT_TRADES": 3,  # per strategy (mirrors live)
+    "USE_BLOWOUT_PROTECTION": True,
+    "BLOWOUT_LOSS_PCT": 50.0,
+    "MIN_BALANCE_THRESHOLD": 200.0,
+    "USE_MIN_BALANCE_STOP": True,
     # Trade management
+    "USE_COMPOUNDING": False,
     "USE_TRAILING_STOP": True,
     "TRAILING_STOP_DISTANCE_PIPS": 10,
     "USE_BREAK_EVEN_STOP": True,

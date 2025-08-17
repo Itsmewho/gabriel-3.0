@@ -26,14 +26,17 @@ def add_pivots(
 
 
 def add_previous_day_levels(df: pd.DataFrame) -> pd.DataFrame:
-    """Add previous day high/low/close (PDH/PDL/PDC) mapped to each minute bar.
-    Uses server date from 'time'. No look-ahead.
+    """Add previous day high/low/close mapped to each minute bar.
+    Uses server date from 'time'. No look-ahead. Correctly maps *previous* day.
     """
     out = df.copy()
     if "time" not in out.columns:
         raise ValueError("df requires 'time' for previous-day levels")
-    t = pd.to_datetime(out["time"]).dt.floor("D")
-    out["__date"] = t
+
+    # Server date buckets
+    out["__date"] = pd.to_datetime(out["time"]).dt.floor("D")
+
+    # Daily OHLC for each server date
     daily = (
         out.groupby("__date")
         .agg(
@@ -43,16 +46,23 @@ def add_previous_day_levels(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
+    # Shift one day to align current date with *previous* day's stats
     daily["prev_date"] = daily["__date"].shift(1)
-    daily_prev = daily[["__date", "day_high", "day_low", "day_close"]].rename(
-        columns={"__date": "map_date"}
+
+    # Map current minute rows by their server date to previous day's levels
+    map_df = daily[["prev_date", "day_high", "day_low", "day_close"]].rename(
+        columns={"prev_date": "map_date"}
     )
-    # Map by current date to previous day's stats via merge
-    out = out.merge(daily_prev, left_on="__date", right_on="map_date", how="left")
+    out = out.merge(map_df, left_on="__date", right_on="map_date", how="left")
+
+    # Rename and clean
     out.rename(
-        columns={"day_high": "pdh", "day_low": "pdl", "day_close": "pdc"}, inplace=True
+        columns={"day_high": "pdh", "day_low": "pdl", "day_close": "pdc"},
+        inplace=True,
     )
     out.drop(columns=["map_date"], inplace=True)
+
     return out
 
 

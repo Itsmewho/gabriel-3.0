@@ -2,9 +2,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
-
+from utils.helpers import setup_logger
 import pandas as pd
 
+
+logger = setup_logger(__name__)
 # Server-time engine. All distances in *pips* scaled by pip_size.
 
 
@@ -12,7 +14,7 @@ import pandas as pd
 class Trade:
     id: int
     symbol: str
-    side: str  # 'buy' or 'sell'
+    side: str
     lot_size: float
     entry_price: float
     sl: Optional[float]
@@ -25,6 +27,9 @@ class Trade:
     highest_price: float = field(default_factory=lambda: -math.inf)
     lowest_price: float = field(default_factory=lambda: math.inf)
     swap_accrued: float = 0.0
+    # --- ADDED: Flags to track activations ---
+    be_activated: bool = False
+    ts_activated: bool = False
 
 
 class OrderEngine:
@@ -72,11 +77,23 @@ class OrderEngine:
 
         # Margin
         self.margin_per_lot: float = float(config.get("MARGIN_PER_LOT", 3882.02))
-        self.entry_margin_buffer_pct: float = float(
-            config.get("ENTRY_MARGIN_BUFFER_PCT", 100.0)
-        )
         self.stop_out_level_pct: float = float(config.get("STOP_OUT_LEVEL_PCT", 50.0))
         self.max_concurrent_trades: int = int(config.get("MAX_CONCURRENT_TRADES", 3))
+
+        # --- MODIFIED: Blowout & Risk Management ---
+        self.use_blowout_protection: bool = bool(
+            config.get("USE_BLOWOUT_PROTECTION", False)
+        )
+        self.blowout_loss_pct: float = float(config.get("BLOWOUT_LOSS_PCT", 50.0))
+        self.use_min_balance_stop: bool = bool(config.get("USE_MIN_BALANCE_STOP", True))
+        self.min_balance_threshold: float = float(
+            config.get("MIN_BALANCE_THRESHOLD", 200.0)
+        )
+        self.trading_enabled: bool = True
+        # --- ADDED: Counters for evaluation ---
+        self.blowout_activations = 0
+        self.insufficient_funds_attempts = 0
+        # --- END MODIFICATION ---
 
         # Stops level constraints
         self.stops_level_pips: float = float(config.get("TRADE_STOPS_LEVEL_PIPS", 0.0))
@@ -91,12 +108,8 @@ class OrderEngine:
         self.max_slip_pips: float = float(config.get("MAX_SLIPPAGE_PIPS", 0.0))
 
         # Swap rollover config (server time)
-        self.swap_rollover_hour: int = int(
-            config.get("SWAP_ROLLOVER_HOUR", 0)
-        )  # 0=midnight server
-        self.triple_swap_weekday: int = int(
-            config.get("TRIPLE_SWAP_WEEKDAY", 2)
-        )  # 0=Mon, 2=Wed
+        self.swap_rollover_hour: int = int(config.get("SWAP_ROLLOVER_HOUR", 0))
+        self.triple_swap_weekday: int = int(config.get("TRIPLE_SWAP_WEEKDAY", 2))
         self.apply_triple_swap: bool = bool(config.get("APPLY_TRIPLE_SWAP", True))
 
         # BE/Trail (all in pips)
@@ -115,7 +128,6 @@ class OrderEngine:
         self._last_swap_date_applied: Optional[pd.Timestamp] = None
         self.swap_history: List[Dict[str, Any]] = []
 
-    # ---------- Public API used by strategies ----------
     def set_strategy(self, strategy):
         self.strategy = strategy
         strategy.set_backtester(self)
@@ -146,22 +158,51 @@ class OrderEngine:
         time: Any,
         lot_size: Optional[float] = None,
     ):
+        if self.use_min_balance_stop:
+            if self.balance < self.min_balance_threshold:
+                if self.trading_enabled:
+                    logger.warning(
+                        f"MIN BALANCE REACHED at {time}: Balance ${self.balance:.2f} is below threshold. Halting new trades."
+                    )
+                    self.trading_enabled = False
+                self.insufficient_funds_attempts += (
+                    1  # Count this as an insufficient funds attempt
+                )
+                return
+            elif not self.trading_enabled:
+                logger.info(
+                    f"TRADING RE-ENABLED at {time}: Balance ${self.balance:.2f} is back above threshold."
+                )
+                self.trading_enabled = True
+
+        if not self.trading_enabled:
+            return
+
         if len(self.open_trades) >= self.max_concurrent_trades:
             return
+
         if self.enforce_open and sl is not None and tp is not None:
             if not self._stops_distance_ok(entry_price, sl, tp):
                 return
+
+        open_pnl = sum(
+            self._pnl_cash(t.side, t.lot_size, t.entry_price, entry_price)
+            for t in self.open_trades
+        )
+        current_equity = self.balance + open_pnl
+        used_margin = sum(t.lot_size for t in self.open_trades) * self.margin_per_lot
+        free_margin = current_equity - used_margin
+
         lots = (
             lot_size if lot_size is not None else self._calc_lot_size(sl, entry_price)
         )
-        needed_margin = (
-            lots * self.margin_per_lot * (self.entry_margin_buffer_pct / 100.0)
-        )
-        if needed_margin > self.balance:
+        needed_margin = lots * self.margin_per_lot
+
+        if needed_margin > free_margin:
+            self.insufficient_funds_attempts += 1
             return
 
         fill = self._apply_entry_spread_slip(side, entry_price)
-
         trade = Trade(
             id=len(self.trade_history) + len(self.open_trades) + 1,
             symbol=self.symbol,
@@ -175,7 +216,6 @@ class OrderEngine:
         trade.highest_price = fill
         trade.lowest_price = fill
 
-        # Commission at open (half round turn)
         self.balance -= self._commission_cost(lots) / 2.0
         self.open_trades.append(trade)
         self._log_concurrency()
@@ -200,11 +240,12 @@ class OrderEngine:
         pnl = self._pnl_cash(trade.side, trade.lot_size, trade.entry_price, fill)
         pnl -= self._commission_cost(trade.lot_size) / 2.0
         pnl += trade.swap_accrued
-        trade.exit_price = fill
-        trade.exit_time = time
-        trade.exit_reason = reason
-        trade.pnl = pnl
-
+        trade.exit_price, trade.exit_time, trade.exit_reason, trade.pnl = (
+            fill,
+            time,
+            reason,
+            pnl,
+        )
         self.balance += pnl
         self.open_trades.remove(trade)
         self.trade_history.append(
@@ -220,9 +261,11 @@ class OrderEngine:
                 "exit_reason": trade.exit_reason,
                 "swap_accrued": trade.swap_accrued,
                 "pnl": trade.pnl,
+                "be_activated": trade.be_activated,
+                "ts_activated": trade.ts_activated,
             }
         )
-        self._update_streaks(pnl)
+        self._update_streaks(pnl, time)
         self._log_concurrency()
 
     # ---------- Per-bar processing ----------
@@ -247,7 +290,6 @@ class OrderEngine:
             trade.highest_price = max(trade.highest_price, price_high)
             trade.lowest_price = min(trade.lowest_price, price_low)
 
-            # Break-even
             if self.use_be and trade.sl is not None:
                 if trade.side == "buy":
                     gain_pips = (price_high - trade.entry_price) / self.pip_size
@@ -256,6 +298,8 @@ class OrderEngine:
                             trade.entry_price + self.be_offset_pips * self.pip_size
                         )
                         if be_price > (trade.sl or -math.inf):
+                            if not trade.be_activated:
+                                trade.be_activated = True
                             self.modify_trade(trade, sl=be_price)
                 else:
                     gain_pips = (trade.entry_price - price_low) / self.pip_size
@@ -264,18 +308,25 @@ class OrderEngine:
                             trade.entry_price - self.be_offset_pips * self.pip_size
                         )
                         if be_price < (trade.sl or math.inf):
+                            if not trade.be_activated:
+                                trade.be_activated = True
                             self.modify_trade(trade, sl=be_price)
-
             # Trailing stop
             if self.use_trailing:
                 dist = self.trail_dist_pips * self.pip_size
                 if trade.side == "buy":
                     trail_sl = trade.highest_price - dist
                     if trade.sl is None or trail_sl > trade.sl:
+                        # --- ADDED: Flag TS activation ---
+                        if not trade.ts_activated:
+                            trade.ts_activated = True
                         self.modify_trade(trade, sl=trail_sl)
                 else:
                     trail_sl = trade.lowest_price + dist
                     if trade.sl is None or trail_sl < trade.sl:
+                        # --- ADDED: Flag TS activation ---
+                        if not trade.ts_activated:
+                            trade.ts_activated = True
                         self.modify_trade(trade, sl=trail_sl)
 
             # SL/TP checks
@@ -387,7 +438,7 @@ class OrderEngine:
     def _log_concurrency(self):
         self.concurrent_trades_log.append(len(self.open_trades))
 
-    def _update_streaks(self, pnl: float):
+    def _update_streaks(self, pnl: float, time: Any):
         if pnl >= 0:
             self._cur_win_streak += 1
             self._cur_win_sum += pnl
@@ -398,6 +449,19 @@ class OrderEngine:
             self._cur_loss_sum += pnl
             self._cur_win_streak = 0
             self._cur_win_sum = 0.0
+
+            blowout_threshold = self.balance * (self.blowout_loss_pct / 100.0)
+            if (
+                self.use_blowout_protection
+                and abs(self._cur_loss_sum) >= blowout_threshold
+            ):
+                if self.trading_enabled:
+                    logger.warning(
+                        f"BLOWOUT TRIGGERED at {time}: Loss streak of ${abs(self._cur_loss_sum):.2f} exceeded {self.blowout_loss_pct}% of balance. Halting new trades."
+                    )
+                    self.trading_enabled = False
+                    self.blowout_activations += 1
+
         self.max_consecutive_wins = max(self.max_consecutive_wins, self._cur_win_streak)
         self.max_consecutive_win_amount = max(
             self.max_consecutive_win_amount, self._cur_win_sum
