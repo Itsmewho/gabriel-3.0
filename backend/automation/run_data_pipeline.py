@@ -37,12 +37,11 @@ def mark_daily_fetch_completed() -> None:
 # --- Main Execution Loop ---
 def run_data_pipeline():
     print(green + "--- Starting Daily data fetch ---" + reset)
+    # 1. Check economic calendar
+    calendar_fetch_service()
     if not RUN_DAILY_FETCH and has_daily_fetch_run():
         print(blue + "Daily fetch already performed. Skipping." + reset)
         return
-
-    # 1. Check economic calendar
-    calendar_fetch_service()
 
     # last mark the key
     mark_daily_fetch_completed()

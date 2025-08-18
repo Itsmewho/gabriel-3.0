@@ -1,17 +1,50 @@
 from datetime import datetime, date as DateType
+from typing import List, Dict, Any, Union
+import time
+import os
+import contextlib
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import time
 from fake_useragent import UserAgent
+
 from utils.helpers import red, reset
-from typing import List, Dict, Any, Union
 
 
 def get_user_agent() -> str:
     return UserAgent().random
+
+
+def _build_silent_chrome() -> webdriver.Chrome:
+    """Create a Chrome WebDriver with logs suppressed.
+
+    Suppresses:
+      - ChromeDriver logs (via Service(log_output=os.devnull))
+      - Chrome "DevTools listening on ws://..." stderr line
+    """
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--log-level=3")  # INFO/WARNING/ERROR only
+    chrome_options.add_argument("--disable-logging")
+    chrome_options.add_argument(f"user-agent={get_user_agent()}")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    # Hide automation + suppress noisy logging on Windows
+    chrome_options.add_experimental_option(
+        "excludeSwitches", ["enable-automation", "enable-logging"]
+    )
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+
+    service = Service(log_output=os.devnull)  # silence chromedriver itself
+
+    # Chrome prints the DevTools line on *stderr*. Redirect around construction.
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stderr(devnull):
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
 
 def scrape_forexfactory_day(date: Union[str, DateType]) -> List[Dict[str, Any]]:
@@ -32,16 +65,7 @@ def scrape_forexfactory_day(date: Union[str, DateType]) -> List[Dict[str, Any]]:
     date_str = date.strftime("%b%d.%Y")
     url = f"https://www.forexfactory.com/calendar?day={date_str}"
 
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument(f"user-agent={get_user_agent()}")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
-
-    driver = webdriver.Chrome(service=Service(), options=chrome_options)
+    driver = _build_silent_chrome()
     events: List[Dict[str, Any]] = []
 
     try:

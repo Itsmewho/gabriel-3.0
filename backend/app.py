@@ -77,8 +77,6 @@ if __name__ == "__main__":
     dwx_thread.start()
 
     threading.Thread(target=run_continuous_data_pipeline, daemon=True).start()
-    threading.Thread(
-        target=run_data_pipeline, daemon=True
-    ).start()  # will run once a day else skip
+    threading.Thread(target=run_data_pipeline, daemon=True).start()
 
     app.run(debug=False, port=5000, use_reloader=False)
