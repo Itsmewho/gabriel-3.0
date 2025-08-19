@@ -11,7 +11,7 @@ from utils.helpers import setup_logger
 logger = setup_logger(__name__)
 
 # Auditor
-from backtester.broker.audit import audit_trades
+from backtester.broker.audit import audit_trades, audit_rejections
 
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
@@ -106,11 +106,11 @@ if __name__ == "__main__":
         if (
             not did_margin_dummy
             and ts.date() == pd.to_datetime("2023-08-10").date()  # type: ignore
-            and ts.hour == 9  # type: ignore
+            and ts.hour == 4  # type: ignore
             and ts.minute == 0  # type: ignore
         ):
             broker.open_trade(
-                "sell", float(row["close"]), lots=0.1, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
+                "sell", float(row["close"]), lots=500.0, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
             )
             did_margin_dummy = True
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         if (
             weekend_trade_id is not None
             and ts.weekday() == 2  # type: ignore
-            and ts.hour == 12  # type: ignore
+            and ts.hour == 8  # type: ignore
             and ts.minute == 0  # type: ignore
         ):
             for tr in list(broker.open_trades):
@@ -146,15 +146,11 @@ if __name__ == "__main__":
 
         from collections import Counter
 
-        print("Executed trades:", len(broker.trade_history))
-        print("Open trades:", len(broker.open_trades))
-        cnt = Counter(e.get("type") for e in broker.events_log)
-        print("Events:", dict(cnt))
     broker.close_all(float(market_data.iloc[-1]["close"]), market_data.index[-1])
 
     # Reports
     audit_trades(broker.trade_history, f"results/audit/{SYMBOL}_trade_audit.csv")
-
+    audit_rejections(broker.rejections, f"results/audit/{SYMBOL}_rejected_trades.csv")
     plot_trades(
         market_data, broker.trade_history, f"results/tradeplots/{SYMBOL}_trade_plot.png"
     )

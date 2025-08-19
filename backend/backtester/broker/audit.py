@@ -1,5 +1,3 @@
-# Audit.py
-
 from __future__ import annotations
 import pandas as pd
 from pathlib import Path
@@ -8,37 +6,27 @@ from . import Trade, PIP_SIZE
 
 
 def log(events_log: List[dict], **kwargs):
-    """
-    Append an event into events_log.
-    Example:
-        log(self.events_log, type="open", time=t, side="buy", price=1.2345, id=1)
-    """
     events_log.append(dict(**kwargs))
 
 
-def audit_trades(trades: List[Trade], filename: str = "results/audit/trade_audit.csv"):
-    """
-    Export trade audit with SL/TP modification info.
-    """
+def audit_trades(
+    trades: List[Trade],
+    filename: str = "results/audit/trade_audit.csv",
+    initial_balance: float | None = None,
+    final_balance: float | None = None,
+):
     if not trades:
         return
-
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
 
     rows = []
     for tr in trades:
-        sl_delta = None
-        tp_delta = None
-        if tr.sl_first is not None and tr.sl_last is not None:
-            sl_delta = (tr.sl_last - tr.sl_first) / PIP_SIZE
-        if tr.tp_first is not None and tr.tp_last is not None:
-            tp_delta = (tr.tp_last - tr.tp_first) / PIP_SIZE
-
         rows.append(
             dict(
                 id=tr.id,
                 side=tr.side,
                 lots=tr.lot_size,
+                initial_balance=tr.balance_at_open,
                 open_time=tr.entry_time,
                 close_time=tr.exit_time,
                 entry_price=tr.entry_price,
@@ -53,13 +41,63 @@ def audit_trades(trades: List[Trade], filename: str = "results/audit/trade_audit
                 lowest_price=tr.lowest_price_during_trade,
                 commission=tr.commission_paid,
                 swap=tr.swap_paid,
-                gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,  # reconstructed
+                gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,
                 net_pnl=tr.pnl,
+                account_balance_after=tr.balance_at_close,
                 exit_reason=tr.exit_reason or "Open",
             )
         )
-
     df = pd.DataFrame(rows)
+    if initial_balance is not None:
+        df.attrs["initial_balance"] = initial_balance
+    if final_balance is not None:
+        df.attrs["final_balance"] = final_balance
     df.to_csv(filename, index=False)
     print(f"Audit log saved to {filename}")
     return df
+
+
+def audit_rejections(
+    rejections: list[dict], filename: str = "results/audit/rejected_trades.csv"
+):
+    if not rejections:
+        return
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    cols = [
+        "id",
+        "time",
+        "side",
+        "lots",
+        "price",
+        "account_balance",
+        "running_balance",
+        "equity",
+        "used_margin",
+        "req_margin",
+        "available_margin",
+        "free_margin_after",
+        "needed_balance",
+        "reason",
+    ]
+    rows = []
+    for r in rejections:
+        rows.append(
+            {
+                "id": r.get("id"),
+                "time": r.get("time"),
+                "side": r.get("side"),
+                "lots": r.get("lots"),
+                "price": r.get("price"),
+                "account_balance": r.get("account_balance"),
+                "running_balance": r.get("running_balance"),
+                "equity": r.get("equity"),
+                "used_margin": r.get("used_margin"),
+                "req_margin": r.get("req_margin"),
+                "available_margin": r.get("free_margin_before"),
+                "free_margin_after": r.get("free_margin_after"),
+                "needed_balance": r.get("needed_balance"),
+                "reason": r.get("reason"),
+            }
+        )
+    pd.DataFrame(rows, columns=cols).to_csv(filename, index=False)
+    print(f"Rejected trades log saved to {filename}")

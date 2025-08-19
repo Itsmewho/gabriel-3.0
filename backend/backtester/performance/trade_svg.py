@@ -18,18 +18,20 @@ def export_trades_csv(trade_history: List[Trade], filename: str):
     cols = [
         "id",
         "side",
+        "balance_at_open",
         "lot_size",
         "entry_time",
-        "exit_time",
-        "exit_reason",
-        "entry_price",
-        "lowest_price_during_trade",
-        "exit_price",
-        "highest_price_during_trade",
         "sl",
         "tp",
+        "entry_price",
+        "lowest_price_during_trade",
+        "highest_price_during_trade",
         "swap_paid",
+        "exit_price",
+        "exit_time",
         "pnl",
+        "balance_at_close",
+        "exit_reason",
     ]
     existing = [c for c in cols if c in df.columns]
     df = df[existing]

@@ -51,8 +51,12 @@ class Trade:
     tp_mod_count: int = 0
 
     # costs
-    commission_paid: float = 0.0  # sum of open+close commissions
-    swap_paid: float = 0.0  # cumulative swaps
+    commission_paid: float = 0.0  # open + close
+    swap_paid: float = 0.0  # cumulative rollover debits
+
+    # balances (for audit)
+    balance_at_open: Optional[float] = None  # BEFORE open fee
+    balance_at_close: Optional[float] = None  # AFTER close is booked
 
 
 __all__ = ["PIP_SIZE", "BrokerConfig", "Trade"]

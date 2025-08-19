@@ -7,17 +7,28 @@ from .cost_engine import value_per_pip, commission_close
 
 def close_trade(
     cfg: BrokerConfig, trade: Trade, exit_price: float, reason: str, t: pd.Timestamp
-) -> float:
+) -> tuple[float, float]:
+    # gross (price-only PnL)
     if trade.side == "buy":
         pips = (exit_price - trade.entry_price) / PIP_SIZE
     else:
         pips = (trade.entry_price - exit_price) / PIP_SIZE
-    # broker/close_orders.py
-    gross = pips * value_per_pip(cfg, trade.lot_size)  # no costs
+    gross = pips * value_per_pip(cfg, trade.lot_size)
+
+    # commission at close (hits account and trade now)
     fee_close = commission_close(cfg, trade.lot_size)
     trade.commission_paid += fee_close
+
+    # stamp
     trade.exit_price = exit_price
     trade.exit_time = t
     trade.exit_reason = reason
-    trade.pnl = gross - trade.commission_paid - trade.swap_paid
-    return trade.pnl
+
+    # full net for audit
+    full_net = gross - trade.commission_paid - trade.swap_paid
+    trade.pnl = full_net
+
+    # balance delta to apply now (open fee & swaps already applied):
+    balance_delta_now = gross - fee_close
+
+    return balance_delta_now, full_net

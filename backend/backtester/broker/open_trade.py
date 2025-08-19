@@ -44,7 +44,6 @@ def open_trade(
         tp_last=tp,
     )
 
-    fee = commission_open(cfg, lots)  # per-side fee at open
-    tr.commission_paid += fee  # record on trade
-
+    fee = commission_open(cfg, lots)  # charged now on account
+    tr.commission_paid += fee  # recorded on trade
     return tr, fee

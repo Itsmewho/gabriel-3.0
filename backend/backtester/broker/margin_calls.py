@@ -1,8 +1,7 @@
 # margin_calls.py
 
-from . import BrokerConfig
+from . import BrokerConfig, PIP_SIZE
 from .cost_engine import value_per_pip
-from . import PIP_SIZE
 
 
 def required_margin(cfg: BrokerConfig, lots: float) -> float:
@@ -46,20 +45,24 @@ def margin_level_pct(cfg: BrokerConfig, balance: float, trades, price: float) ->
     return 999999.0 if um == 0 else (eq / um) * 100.0
 
 
-# --- Order gating (rejections) ---
-def can_open_order(
-    cfg: BrokerConfig, balance: float, trades, lots: float, price: float
-) -> tuple[bool, float, float]:
-    """
-    Return (ok, req_margin, free_margin_after_open).
-    Reject if free margin after reserving required margin would be < 0.
-    """
+def can_open_order(cfg, balance, trades, lots, price):
     req = required_margin(cfg, lots)
-    fm = free_margin(cfg, balance, trades, price)
-    return (fm - req >= 0.0, req, fm - req)
+    um = used_margin(cfg, trades)
+    eq = equity(cfg, balance, trades, price)
+    fm_before = eq - um
+    fm_after = fm_before - req
+    needed_balance = max(0.0, req - fm_before)
+    return {
+        "ok": fm_after >= 0.0,
+        "req_margin": req,
+        "used_margin": um,
+        "equity": eq,
+        "free_margin_before": fm_before,
+        "free_margin_after": fm_after,
+        "needed_balance": needed_balance,
+    }
 
 
-# --- Runtime protection ---
 def needs_warning(cfg: BrokerConfig, balance: float, trades, price: float) -> bool:
     ml = margin_level_pct(cfg, balance, trades, price)
     return 0 < ml < 90.0
@@ -71,7 +74,6 @@ def needs_stop_out(cfg: BrokerConfig, balance: float, trades, price: float) -> b
 
 
 def pick_worst_trade(cfg: BrokerConfig, trades, price: float):
-    """Largest loss first."""
     if not trades:
         return None
     losses = []
@@ -83,5 +85,5 @@ def pick_worst_trade(cfg: BrokerConfig, trades, price: float):
         )
         pnl = pips * value_per_pip(cfg, tr.lot_size)
         losses.append((pnl, tr))
-    losses.sort(key=lambda x: x[0])  # most negative first
+    losses.sort(key=lambda x: x[0])
     return losses[0][1]
