@@ -6,8 +6,12 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, Any, Optional
 from utils.helpers import setup_logger
 
+
 # Logger
 logger = setup_logger(__name__)
+
+# Auditor
+from backtester.broker.audit import audit_trades
 
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
@@ -22,8 +26,9 @@ from backtester.data.loaders import fetch_sql_market_data
 from backtester.performance.trade_plots import plot_trades
 from backtester.performance.trade_svg import export_trades_csv
 
-# order executions
-from backtester.order_executions.main_order import OrderEngine
+# Broker
+from backtester.broker import BrokerConfig
+from backtester.broker.main_broker import Broker
 
 
 # --- Data Preparation & Caching  ---
@@ -63,30 +68,94 @@ def prepare_data(
 
 
 if __name__ == "__main__":
-    # --- Setup ---
-    START_DATE = "2023-08-01"
-    END_DATE = "2023-08-31"
-    SYMBOL = "EURUSD"
-    TIMEFRAME = "1m"
+    np.random.seed(42)
 
-    # --- Data Loading ---
+    START_DATE, END_DATE = "2023-08-01", "2023-08-31"
+    SYMBOL, TIMEFRAME = "EURUSD", "1m"
+
     market_data = prepare_data(SYMBOL, TIMEFRAME, START_DATE, END_DATE)
+    if market_data.empty:
+        raise SystemExit("No market data fetched")
 
-    # --- Backtest ---
-    engine = OrderEngine(BACKTEST_CONFIG)
+    Path("results/tradeplots").mkdir(parents=True, exist_ok=True)
+    Path("results/evals").mkdir(parents=True, exist_ok=True)
+    Path("results/audit").mkdir(parents=True, exist_ok=True)
 
-    # Simple "trade every 6 hours" strategy
-    for timestamp, row in market_data.iterrows():
-        if timestamp.hour % 6 == 0 and timestamp.minute == 0 and not engine.open_trades:  # type: ignore
-            if np.random.rand() > 0.5:
-                engine.open_trade("buy", row["close"], 0.5, 50, 500, timestamp)  # type: ignore
-            else:
-                engine.open_trade("sell", row["close"], 0.1, 50, 100, timestamp)  # type: ignore
+    cfg = BrokerConfig(**BACKTEST_CONFIG)
+    broker = Broker(cfg)
 
-        engine.on_bar(row["high"], row["low"], row["close"], timestamp)  # type: ignore
+    did_manual_long = False
+    did_margin_dummy = False
+    did_weekend_dummy = False
+    weekend_trade_id = None
 
-    # --- Reporting ---
-    engine.close_all_open_trades(market_data.iloc[-1]["close"], market_data.index[-1])
+    for ts, row in market_data.iterrows():
+        # Manual long: 2023-08-09 09:00 local (naive)
+        if (
+            not did_manual_long
+            and ts.date() == pd.to_datetime("2023-08-09").date()  # type: ignore
+            and ts.hour == 9  # type: ignore
+            and ts.minute == 0  # type: ignore
+        ):
+            broker.open_trade(
+                "buy", float(row["close"]), lots=0.1, sl_pips=100, tp_pips=100, t=ts  # type: ignore
+            )
+            did_manual_long = True
 
-    plot_trades(market_data, engine.trade_history, f"results/tradeplots/{SYMBOL}_trade_plot.png")  # type: ignore
-    export_trades_csv(engine.trade_history, f"results/evals/{SYMBOL}_trade_report.csv")
+        # Margin dummy: 2023-08-10 09:00 local
+        if (
+            not did_margin_dummy
+            and ts.date() == pd.to_datetime("2023-08-10").date()  # type: ignore
+            and ts.hour == 9  # type: ignore
+            and ts.minute == 0  # type: ignore
+        ):
+            broker.open_trade(
+                "sell", float(row["close"]), lots=0.1, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
+            )
+            did_margin_dummy = True
+
+        # Weekend trade open: Friday 16:00
+        if (
+            not did_weekend_dummy
+            and ts.weekday() == 4  # type: ignore
+            and ts.hour == 16  # type: ignore
+            and ts.minute == 0  # type: ignore
+        ):
+            broker.open_trade(
+                "buy", float(row["close"]), lots=0.01, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
+            )
+            weekend_trade_id = broker.open_trades[-1].id
+            did_weekend_dummy = True
+
+        broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
+
+        # Close weekend trade: Wednesday 12:00 (weekday 2)
+        if (
+            weekend_trade_id is not None
+            and ts.weekday() == 2  # type: ignore
+            and ts.hour == 12  # type: ignore
+            and ts.minute == 0  # type: ignore
+        ):
+            for tr in list(broker.open_trades):
+                if tr.id == weekend_trade_id:
+                    broker.close_trade(
+                        tr, float(row["close"]), "Manual Close (Wed Noon)", ts  # type: ignore
+                    )
+                    weekend_trade_id = None
+                    break
+
+        from collections import Counter
+
+        print("Executed trades:", len(broker.trade_history))
+        print("Open trades:", len(broker.open_trades))
+        cnt = Counter(e.get("type") for e in broker.events_log)
+        print("Events:", dict(cnt))
+    broker.close_all(float(market_data.iloc[-1]["close"]), market_data.index[-1])
+
+    # Reports
+    audit_trades(broker.trade_history, f"results/audit/{SYMBOL}_trade_audit.csv")
+
+    plot_trades(
+        market_data, broker.trade_history, f"results/tradeplots/{SYMBOL}_trade_plot.png"
+    )
+    export_trades_csv(broker.trade_history, f"results/evals/{SYMBOL}_trade_report.csv")

@@ -1,5 +1,5 @@
 from dataclasses import asdict, is_dataclass
-from backtester.order_executions.main_order import Trade
+from backtester.broker.main_broker import Trade
 from pathlib import Path
 from typing import List
 import pandas as pd
@@ -18,16 +18,17 @@ def export_trades_csv(trade_history: List[Trade], filename: str):
     cols = [
         "id",
         "side",
+        "lot_size",
         "entry_time",
         "exit_time",
         "exit_reason",
         "entry_price",
+        "lowest_price_during_trade",
         "exit_price",
+        "highest_price_during_trade",
         "sl",
         "tp",
-        "lot_size",
-        "lowest_price_during_trade",
-        "highest_price_during_trade",
+        "swap_paid",
         "pnl",
     ]
     existing = [c for c in cols if c in df.columns]

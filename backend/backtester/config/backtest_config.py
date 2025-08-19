@@ -1,11 +1,16 @@
+# Config
+
+
 # 1pip = 0.0001 (EUR/USD = 1.00040 + 1 pips = 1.00050)
+# if latency is >20ms a 2 pip sl is possible. (2pip safe -> 1pip can be rejected!)
+
 BACKTEST_CONFIG = {
     # Account
     "INITIAL_BALANCE": 5000.00,
     "SYMBOL": "EURUSD",
     # Broker
     "SPREAD_PIPS": 0.2,
-    "COMMISSION_PER_LOT_RT": 7.00,
+    "COMMISSION_PER_LOT_PER_SIDE": 3.50,
     "SWAP_LONG_POINTS": -9.89,
     "SWAP_SHORT_POINTS": 5.44,
     "CONTRACT_SIZE": 100000,

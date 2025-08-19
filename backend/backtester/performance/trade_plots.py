@@ -106,7 +106,7 @@ def plot_trades(
                     if c is not None:
                         exitp.loc[ts] = c
 
-    # Segments for entry→exit lines
+    # Entry→exit line segments
     segments, seg_colors = [], []
 
     def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
@@ -121,7 +121,6 @@ def plot_trades(
         ts_entry = _nearest(getattr(it, "entry_time"))
         ts_exit = _nearest(getattr(it, "exit_time"))
 
-        # entry marker position
         if side == "buy":
             p_entry = _price_at(ts_entry, "Low")
             y_entry = p_entry * 0.999 if p_entry is not None else None
@@ -131,7 +130,6 @@ def plot_trades(
         else:
             continue
 
-        # exit marker position
         y_exit = getattr(it, "exit_price", None)
         if y_exit is None:
             y_exit = _price_at(ts_exit, "Close")
@@ -140,24 +138,40 @@ def plot_trades(
             continue
 
         segments.append([(ts_entry, float(y_entry)), (ts_exit, float(y_exit))])
-
         prof = (y_exit > y_entry) if side == "buy" else (y_exit < y_entry)
         seg_colors.append("green" if prof else "red")
 
-    # Plots for markers
-    plots = [
-        mpf.make_addplot(
-            buy, type="scatter", marker="^", color="green", markersize=markersize
-        ),
-        mpf.make_addplot(
-            sell, type="scatter", marker="v", color="red", markersize=markersize
-        ),
-        mpf.make_addplot(
-            exitp, type="scatter", marker="x", color="blue", markersize=markersize
-        ),
-    ]
+    # Build overlays only if they have data
+    def _nonempty(s: pd.Series) -> bool:
+        v = s.values
+        return np.isfinite(v).any()  # type: ignore
 
-    # Final plot
+    plots: list[Any] = []
+    if _nonempty(buy):
+        plots.append(
+            mpf.make_addplot(
+                buy, type="scatter", marker="^", color="green", markersize=markersize
+            )
+        )
+    if _nonempty(sell):
+        plots.append(
+            mpf.make_addplot(
+                sell, type="scatter", marker="v", color="red", markersize=markersize
+            )
+        )
+    if _nonempty(exitp):
+        plots.append(
+            mpf.make_addplot(
+                exitp, type="scatter", marker="x", color="blue", markersize=markersize
+            )
+        )
+
+    aline_kwargs = {}
+    if segments:
+        aline_kwargs = dict(
+            alines=dict(alines=segments, colors=seg_colors, linewidths=1.5, alpha=0.9)
+        )
+
     wtd = warn_cap if warn_cap is not None else len(df) + 1
     mpf.plot(
         df,
@@ -165,11 +179,12 @@ def plot_trades(
         style="yahoo",
         title="Trade Entries and Exits",
         ylabel="Price",
-        addplot=plots,
-        alines=dict(alines=segments, colors=seg_colors, linewidths=1.5, alpha=0.9),
+        addplot=plots if plots else None,
         figscale=1.4,
         tight_layout=True,
         warn_too_much_data=wtd,
         savefig=dict(fname=filename, dpi=fig_dpi),
+        **aline_kwargs,
     )
+    print(f"PNG trade-plot report saved to {filename}")
     return filename
