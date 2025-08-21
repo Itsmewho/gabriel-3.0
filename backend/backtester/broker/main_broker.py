@@ -1,6 +1,5 @@
 # main_broker.py
 
-
 import pandas as pd
 from typing import List
 from . import BrokerConfig, Trade
@@ -11,8 +10,10 @@ from .margin_calls import (
     needs_warning,
     needs_stop_out,
     pick_worst_trade,
+    margin_level_pct,
 )
-from .trailing_sl import update_trailing_sl
+from .break_even import update_break_even
+from .trailing_sl import update_trailing_sl, update_trailing_tp
 from .cost_engine import swap_cost
 from .audit import log
 
@@ -27,8 +28,11 @@ class Broker:
         self.rejections: list[dict] = []
         self._last_swap_day = None
         self._next_id = 1
+        self.trading_enabled = True
+        self.resume_margin_level_pct = 120.0  # resume when ML% ≥ this
+        self.resume_margin_level_pct = cfg.RESUME_MARGIN_LEVEL_PCT
 
-    def open_trade(
+    def execute_trade(
         self,
         side: str,
         price: float,
@@ -98,6 +102,95 @@ class Broker:
         for tr in list(self.open_trades):
             self.close_trade(tr, price, reason, t)
 
+    def open_trade(
+        self,
+        side: str,
+        price: float,
+        wanted_lots: float,
+        sl_pips: float,
+        tp_pips: float,
+        t: pd.Timestamp,
+        fallbacks: list[float] | None = None,
+    ):
+        """
+        Try wanted_lots, then fallbacks (fractions or absolute lots).
+        If none pass margin checks, pause trading and log a 'trading_paused' event.
+        """
+        if not self.trading_enabled:
+            log(
+                self.events_log,
+                type="open_skipped_paused",
+                time=t,
+                reason="trading_paused",
+            )
+            return None
+
+        # build fallback sizes
+        if fallbacks is not None:
+            candidates = [wanted_lots] + [l for l in fallbacks if l != wanted_lots]
+        elif self.cfg.FALLBACK_LOTS:
+            candidates = [wanted_lots] + [
+                l for l in self.cfg.FALLBACK_LOTS if l != wanted_lots
+            ]
+        else:
+            # fractions of wanted size
+            fracs = list(self.cfg.FALLBACK_FRACTIONS)
+            candidates = [wanted_lots] + [wanted_lots * f for f in fracs]
+
+        for lots in candidates:
+            if lots <= 0:
+                continue
+            diag = can_open_order(self.cfg, self.balance, self.open_trades, lots, price)
+            if diag["ok"]:
+                # proceed with normal open
+                return self.execute_trade(side, price, lots, sl_pips, tp_pips, t)
+
+            # record each rejection attempt
+            rej = {
+                "id": self._next_id,
+                "time": t,
+                "side": side,
+                "lots": lots,
+                "price": price,
+                "account_balance": self.balance,
+                "equity": diag["equity"],
+                "used_margin": diag["used_margin"],
+                "req_margin": diag["req_margin"],
+                "available_margin": diag["free_margin_before"],
+                "free_margin_after": diag["free_margin_after"],
+                "needed_balance": diag["needed_balance"],
+                "reason": "Insufficient margin (fallback try)",
+            }
+            self.rejections.append(rej)
+            log(self.events_log, type="rejection", **rej)
+
+        # all failed → pause trading
+        if self.cfg.AUTO_PAUSE_ON_REJECTION:
+            log(
+                self.events_log,
+                type="trading_paused",
+                time=t,
+                reason="all_fallbacks_rejected",
+            )
+            return None
+
+    def maybe_resume_trading(self, price: float, t: pd.Timestamp):
+        """Auto-resume when margin level is comfortably above a threshold."""
+        if self.trading_enabled:
+            return
+        ml = margin_level_pct(self.cfg, self.balance, self.open_trades, price)
+        if ml >= self.resume_margin_level_pct:
+            self.trading_enabled = True
+            log(self.events_log, type="trading_resumed", time=t, margin_level=ml)
+
+    def set_break_even(self, trade_id: int, be_pips: float, offset_pips: float = 0.0):
+        for tr in self.open_trades:
+            if tr.id == trade_id:
+                tr.be_trigger_pips = be_pips
+                tr.be_offset_pips = offset_pips
+                return True
+        return False
+
     def on_bar(
         self,
         high: float,
@@ -110,23 +203,96 @@ class Broker:
         for tr in list(self.open_trades):
             tr.highest_price_during_trade = max(tr.highest_price_during_trade, high)
             tr.lowest_price_during_trade = min(tr.lowest_price_during_trade, low)
-            update_trailing_sl(
-                tr, high, low, trail_pips, events_log=self.events_log, t=t
-            )
 
+            # --- Break-even (per-trade or global) ---
+            trig = tr.be_trigger_pips or (
+                self.cfg.BREAK_EVEN_TRIGGER_PIPS if self.cfg.BREAK_EVEN_ENABLE else None
+            )
+            off = tr.be_offset_pips or self.cfg.BREAK_EVEN_OFFSET_PIPS
+
+            if trig and trig > 0:
+                update_break_even(
+                    tr,
+                    high,
+                    low,
+                    trigger_pips=trig,
+                    offset_pips=off,
+                    events_log=self.events_log,
+                    t=t,
+                )
+                log(
+                    self.events_log,
+                    type="break_even_config",
+                    trade_id=tr.id,
+                    source="per_trade" if tr.be_trigger_pips else "global",
+                    trigger_pips=trig,
+                    offset_pips=off,
+                    time=t,
+                )
+
+            # --- Trailing SL ---
+            update_trailing_sl(
+                tr,
+                high,
+                low,
+                trail_pips=tr.trailing_sl_distance or trail_pips,
+                events_log=self.events_log,
+                t=t,
+            )
+            if tr.trailing_sl_distance or trail_pips:
+                log(
+                    self.events_log,
+                    type="trailing_sl_config",
+                    trade_id=tr.id,
+                    source="per_trade" if tr.trailing_sl_distance else "global",
+                    distance_pips=tr.trailing_sl_distance or trail_pips,
+                    time=t,
+                )
+
+            # --- Trailing TP ---
+            update_trailing_tp(
+                tr,
+                high,
+                low,
+                cfg=self.cfg,
+                events_log=self.events_log,
+                t=t,
+                near_tp_buffer_pips=tr.near_tp_buffer_pips,
+                tp_extension_pips=tr.tp_extension_pips,
+            )
+            if tr.near_tp_buffer_pips or tr.tp_extension_pips:
+                log(
+                    self.events_log,
+                    type="tp_extend_config",
+                    trade_id=tr.id,
+                    source=(
+                        "per_trade"
+                        if (tr.near_tp_buffer_pips or tr.tp_extension_pips)
+                        else "global"
+                    ),
+                    buffer_pips=tr.near_tp_buffer_pips or self.cfg.NEAR_TP_BUFFER_PIPS,
+                    extension_pips=tr.tp_extension_pips or self.cfg.TP_EXTENSION_PIPS,
+                    time=t,
+                )
+
+            # --- Exit logic ---
             if tr.side == "buy":
                 if low <= (tr.sl or -1e9):
-                    self.close_trade(tr, tr.sl, "Stop Loss", t)  # type: ignore
+                    reason = tr.sl_reason or "Stop Loss"
+                    self.close_trade(tr, tr.sl, reason, t)  # type: ignore
                     continue
                 if high >= (tr.tp or 1e9):
-                    self.close_trade(tr, tr.tp, "Take Profit", t)  # type: ignore
+                    reason = tr.tp_reason or "Take Profit"
+                    self.close_trade(tr, tr.tp, reason, t)  # type: ignore
                     continue
             else:
                 if high >= (tr.sl or 1e9):
-                    self.close_trade(tr, tr.sl, "Stop Loss", t)  # type: ignore
+                    reason = tr.sl_reason or "Stop Loss"
+                    self.close_trade(tr, tr.sl, reason, t)  # type: ignore
                     continue
                 if low <= (tr.tp or -1e9):
-                    self.close_trade(tr, tr.tp, "Take Profit", t)  # type: ignore
+                    reason = tr.tp_reason or "Take Profit"
+                    self.close_trade(tr, tr.tp, reason, t)  # type: ignore
                     continue
 
         # margin warning

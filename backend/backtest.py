@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, Any, Optional
 from utils.helpers import setup_logger
 
 
@@ -11,7 +10,11 @@ from utils.helpers import setup_logger
 logger = setup_logger(__name__)
 
 # Auditor
-from backtester.broker.audit import audit_trades, audit_rejections
+from backtester.broker.audit import (
+    audit_trades,
+    audit_rejections,
+    audit_max_open_trades,
+)
 
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
@@ -88,65 +91,83 @@ if __name__ == "__main__":
     did_margin_dummy = False
     did_weekend_dummy = False
     weekend_trade_id = None
+    # before the loop
+    did_be_1 = False
+    did_be_2 = False
+    did_be_3 = False
 
     for ts, row in market_data.iterrows():
-        # Manual long: 2023-08-09 09:00 local (naive)
+        px = float(row["close"])
+
+        # --- Example 1: once at a specific time ---
         if (
             not did_manual_long
             and ts.date() == pd.to_datetime("2023-08-09").date()  # type: ignore
             and ts.hour == 9  # type: ignore
             and ts.minute == 0  # type: ignore
         ):
-            broker.open_trade(
-                "buy", float(row["close"]), lots=0.1, sl_pips=100, tp_pips=100, t=ts  # type: ignore
+            tr = broker.open_trade(
+                "sell",
+                float(row["close"]),
+                wanted_lots=50,
+                sl_pips=50,
+                tp_pips=50,
+                t=ts,  # type: ignore
             )
-            did_manual_long = True
+            if tr:
+                did_manual_long = True  # ← correct flag here
 
-        # Margin dummy: 2023-08-10 09:00 local
         if (
-            not did_margin_dummy
-            and ts.date() == pd.to_datetime("2023-08-10").date()  # type: ignore
-            and ts.hour == 4  # type: ignore
+            not did_be_1  # type: ignore
+            and ts.date() == pd.to_datetime("2023-08-09").date()  # type: ignore
+            and ts.hour == 9  # type: ignore
             and ts.minute == 0  # type: ignore
         ):
-            broker.open_trade(
-                "sell", float(row["close"]), lots=500.0, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
+            tr = broker.open_trade(
+                "sell",
+                px,
+                wanted_lots=1.0,
+                sl_pips=50,
+                tp_pips=50,
+                t=ts,  # type: ignore
+                fallbacks=[0.5, 0.25],
             )
-            did_margin_dummy = True
+            if tr:
+                broker.set_break_even(tr.id, be_pips=8)  # 8 pips to BE
+            did_be_1 = False
 
-        # Weekend trade open: Friday 16:00
-        if (
-            not did_weekend_dummy
-            and ts.weekday() == 4  # type: ignore
-            and ts.hour == 16  # type: ignore
-            and ts.minute == 0  # type: ignore
-        ):
-            broker.open_trade(
-                "buy", float(row["close"]), lots=0.01, sl_pips=5000, tp_pips=5000, t=ts  # type: ignore
+        # --- Example 2: weekend trade once at Fri 16:00 ---
+        if not did_be_2 and ts.weekday() == 4 and ts.hour == 16 and ts.minute == 0:  # type: ignore
+            tr = broker.open_trade(
+                "buy",
+                px,
+                wanted_lots=0.01,
+                sl_pips=5000,
+                tp_pips=5000,
+                t=ts,  # type: ignore
+                fallbacks=[0.35, 0.15],
             )
-            weekend_trade_id = broker.open_trades[-1].id
-            did_weekend_dummy = True
+            if tr:
+                broker.set_break_even(tr.id, be_pips=5)  # 5 pips to BE
+                did_be_2 = False
 
+        # --- Example 3: 6-hour strategy once at first 6h tick after start ---
+        if not did_be_3 and ts.hour % 6 == 0 and ts.minute == 0:  # type: ignore
+            tr = broker.open_trade(
+                side="buy" if np.random.rand() > 0.5 else "sell",
+                price=px,
+                wanted_lots=0.50,
+                sl_pips=10,
+                tp_pips=30,
+                t=ts,  # type: ignore
+                fallbacks=[0.35, 0.15],
+            )
+            if tr:
+                broker.set_break_even(tr.id, be_pips=6)  # 6 pips to BE
+                did_be_3 = False
+
+        # normal bar handling
         broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
-
-        # Close weekend trade: Wednesday 12:00 (weekday 2)
-        if (
-            weekend_trade_id is not None
-            and ts.weekday() == 2  # type: ignore
-            and ts.hour == 8  # type: ignore
-            and ts.minute == 0  # type: ignore
-        ):
-            for tr in list(broker.open_trades):
-                if tr.id == weekend_trade_id:
-                    broker.close_trade(
-                        tr, float(row["close"]), "Manual Close (Wed Noon)", ts  # type: ignore
-                    )
-                    weekend_trade_id = None
-                    break
-
-        from collections import Counter
-
-    broker.close_all(float(market_data.iloc[-1]["close"]), market_data.index[-1])
 
     # Reports
     audit_trades(broker.trade_history, f"results/audit/{SYMBOL}_trade_audit.csv")
@@ -155,3 +176,6 @@ if __name__ == "__main__":
         market_data, broker.trade_history, f"results/tradeplots/{SYMBOL}_trade_plot.png"
     )
     export_trades_csv(broker.trade_history, f"results/evals/{SYMBOL}_trade_report.csv")
+    audit_max_open_trades(
+        broker.trade_history, f"results/audit/{SYMBOL}_max_open_trades.csv"
+    )

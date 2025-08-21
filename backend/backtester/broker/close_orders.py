@@ -22,6 +22,8 @@ def close_trade(
     # stamp
     trade.exit_price = exit_price
     trade.exit_time = t
+    if reason == "Take Profit" and getattr(trade, "tp_mod_count", 0) > 0:
+        reason = "Take Profit (extended)"
     trade.exit_reason = reason
 
     # full net for audit

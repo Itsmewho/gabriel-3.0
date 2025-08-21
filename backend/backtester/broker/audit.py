@@ -1,3 +1,5 @@
+# Audit broker_functions
+
 from __future__ import annotations
 import pandas as pd
 from pathlib import Path
@@ -26,32 +28,49 @@ def audit_trades(
                 id=tr.id,
                 side=tr.side,
                 lots=tr.lot_size,
+                # balances
                 initial_balance=tr.balance_at_open,
+                account_balance_after=tr.balance_at_close,
+                # times & prices
                 open_time=tr.entry_time,
                 close_time=tr.exit_time,
                 entry_price=tr.entry_price,
                 exit_price=tr.exit_price,
+                # SL/TP evolution
                 sl_first=tr.sl_first,
                 sl_last=tr.sl_last,
                 sl_mod_count=tr.sl_mod_count,
                 tp_first=tr.tp_first,
                 tp_last=tr.tp_last,
                 tp_mod_count=tr.tp_mod_count,
+                # reasons for last SL/TP state
+                sl_reason=getattr(tr, "sl_reason", None),
+                tp_reason=getattr(tr, "tp_reason", None),
+                # BE audit
+                be_applied=getattr(tr, "be_applied", False),
+                be_price=getattr(tr, "be_price", None),
+                be_trigger_pips=getattr(tr, "be_trigger_pips", None),
+                be_offset_pips=getattr(tr, "be_offset_pips", 0.0),
+                # per-trade trailing overrides (if any)
+                trailing_sl_distance=getattr(tr, "trailing_sl_distance", None),
+                near_tp_buffer_pips=getattr(tr, "near_tp_buffer_pips", None),
+                tp_extension_pips=getattr(tr, "tp_extension_pips", None),
+                # stats
                 highest_price=tr.highest_price_during_trade,
                 lowest_price=tr.lowest_price_during_trade,
+                # costs & PnL
                 commission=tr.commission_paid,
                 swap=tr.swap_paid,
                 gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,
                 net_pnl=tr.pnl,
-                account_balance_after=tr.balance_at_close,
                 exit_reason=tr.exit_reason or "Open",
+                # (optional) copy globals to each row for easier filtering in CSV tools
+                initial_balance_global=initial_balance,
+                final_balance_global=final_balance,
             )
         )
+
     df = pd.DataFrame(rows)
-    if initial_balance is not None:
-        df.attrs["initial_balance"] = initial_balance
-    if final_balance is not None:
-        df.attrs["final_balance"] = final_balance
     df.to_csv(filename, index=False)
     print(f"Audit log saved to {filename}")
     return df
@@ -101,3 +120,44 @@ def audit_rejections(
         )
     pd.DataFrame(rows, columns=cols).to_csv(filename, index=False)
     print(f"Rejected trades log saved to {filename}")
+
+
+def audit_max_open_trades(
+    trades: list[Trade],
+    filename: str = "results/audit/max_open_trades.csv",
+):
+    """
+    Compute the maximum number of trades open at the same time.
+    Saves a CSV with: max_open_trades, first_time_reached
+    """
+    if not trades:
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([{"max_open_trades": 0, "first_time_reached": None}]).to_csv(
+            filename, index=False
+        )
+        return 0
+
+    events = []
+    for tr in trades:
+        if tr.entry_time is not None:
+            events.append((pd.to_datetime(tr.entry_time), 0, +1))
+        if tr.exit_time is not None:
+            events.append((pd.to_datetime(tr.exit_time), 1, -1))
+
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    cur = 0
+    mx = 0
+    first_ts = None
+    for ts, _, delta in events:
+        cur += delta
+        if cur > mx:
+            mx = cur
+            first_ts = ts
+
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{"max_open_trades": mx, "first_time_reached": first_ts}]).to_csv(
+        filename, index=False
+    )
+    print(f"MAX open trades log saved to {filename}")
+    return mx

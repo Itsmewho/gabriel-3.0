@@ -45,18 +45,29 @@ def plot_trades(
 ):
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
 
+    # --- normalize market data index ---
     df = market_data.copy()
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)
     df = df.sort_index()
+    if df.index.tz is not None:  # type: ignore
+        df.index = df.index.tz_convert("UTC").tz_localize(None)  # type: ignore
+
     df = _ensure_ohlc_columns(df, columns)
 
-    buy = pd.Series(np.nan, index=df.index, dtype="float64")
-    sell = pd.Series(np.nan, index=df.index, dtype="float64")
-    exitp = pd.Series(np.nan, index=df.index, dtype="float64")
+    # --- helpers ---
+    def _norm_ts(ts: pd.Timestamp) -> pd.Timestamp:
+        ts = pd.to_datetime(ts)
+        if getattr(ts, "tzinfo", None) is not None:
+            try:
+                ts = ts.tz_convert("UTC")
+            except Exception:
+                pass
+            ts = ts.tz_localize(None)
+        return ts
 
     def _price_at(ts: pd.Timestamp, key: str) -> float | None:
-        ts = pd.to_datetime(ts)
+        ts = _norm_ts(ts)
         if ts in df.index:
             return float(df.loc[ts, key])  # type: ignore[index]
         pos = df.index.get_indexer([ts], method="nearest")[0]
@@ -64,54 +75,61 @@ def plot_trades(
             return None
         return float(df.iloc[pos][key])
 
+    def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
+        ts = _norm_ts(ts)
+        pos = df.index.get_indexer([ts], method="nearest")[0]
+        return df.index[pos]  # type: ignore
+
+    # --- series for markers ---
+    buy = pd.Series(np.nan, index=df.index, dtype="float64")
+    sell = pd.Series(np.nan, index=df.index, dtype="float64")
+    exitp = pd.Series(np.nan, index=df.index, dtype="float64")
+
     # Entries
     for it in trades_or_events:
         if isinstance(it, dict):
-            ts = pd.to_datetime(it.get("time"))  # type: ignore
+            ts = _norm_ts(it.get("time"))  # type: ignore
             et = it.get("type")
             side = it.get("side")
             if et == "open" and side == "buy":
                 p = _price_at(ts, "Low")
-                buy.loc[ts] = p * 0.999 if p is not None else np.nan
+                buy.loc[_nearest(ts)] = p * 0.999 if p is not None else np.nan  # type: ignore
             elif et == "open" and side == "sell":
                 p = _price_at(ts, "High")
-                sell.loc[ts] = p * 1.001 if p is not None else np.nan
+                sell.loc[_nearest(ts)] = p * 1.001 if p is not None else np.nan  # type: ignore
         else:
-            ts = pd.to_datetime(getattr(it, "entry_time", None))  # type: ignore
+            ts = _norm_ts(getattr(it, "entry_time", None))  # type: ignore
             side = getattr(it, "side", None)
             if side == "buy":
                 p = _price_at(ts, "Low")
-                buy.loc[ts] = p * 0.999 if p is not None else np.nan
+                buy.loc[_nearest(ts)] = p * 0.999 if p is not None else np.nan  # type: ignore
             elif side == "sell":
                 p = _price_at(ts, "High")
-                sell.loc[ts] = p * 1.001 if p is not None else np.nan
+                sell.loc[_nearest(ts)] = p * 1.001 if p is not None else np.nan  # type: ignore
 
     # Exits
     for it in trades_or_events:
         if isinstance(it, dict):
             if it.get("type") == "close":
-                ts = pd.to_datetime(it.get("time"))  # type: ignore
+                ts = _norm_ts(it.get("time"))  # type: ignore
                 px = it.get("price")
                 if px is not None:
-                    exitp.loc[ts] = float(px)
+                    exitp.loc[_nearest(ts)] = float(px)  # type: ignore
         else:
             ts_exit = getattr(it, "exit_time", None)
             if ts_exit is not None:
-                ts = pd.to_datetime(ts_exit)
+                ts = _norm_ts(ts_exit)
                 px = getattr(it, "exit_price", None)
                 if px is not None:
-                    exitp.loc[ts] = float(px)
+                    exitp.loc[_nearest(ts)] = float(px)  # type: ignore
                 else:
                     c = _price_at(ts, "Close")
                     if c is not None:
-                        exitp.loc[ts] = c
+                        exitp.loc[_nearest(ts)] = c  # type: ignore
 
     # Entry→exit line segments
-    segments, seg_colors = [], []
-
-    def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
-        pos = df.index.get_indexer([pd.to_datetime(ts)], method="nearest")[0]
-        return df.index[pos]  # type: ignore
+    segments: list[list[tuple[pd.Timestamp, float]]] = []
+    seg_colors: list[str] = []
 
     for it in trades_or_events:
         if isinstance(it, dict) or getattr(it, "exit_time", None) is None:

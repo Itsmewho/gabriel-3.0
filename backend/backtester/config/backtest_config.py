@@ -22,4 +22,16 @@ BACKTEST_CONFIG = {
     # Sizing & risk
     "VOLUME_STEP": 0.01,
     "VOLUME_MIN": 0.01,
+    # Auto retry and resize if rejected
+    "AUTO_PAUSE_ON_REJECTION": True,
+    "RESUME_MARGIN_LEVEL_PCT": 120.0,
+    "FALLBACK_LOTS": None,  # Or list them -> [list]
+    "FALLBACK_FRACTIONS": (0.5, 0.25, 0.10),
+    # Trailing tp
+    "NEAR_TP_BUFFER_PIPS": 2.0,  # within 2 pips of current TP
+    "TP_EXTENSION_PIPS": 3.0,  # extend TP by 3 pips each time it’s within buffer
+    # Break even
+    "BREAK_EVEN_ENABLE": False,
+    "BREAK_EVEN_TRIGGER_PIPS": 3,  # move SL to BE after + X pips in favor
+    "BREAK_EVEN_OFFSET_PIPS": 1,  # lock in +1 pip
 }
