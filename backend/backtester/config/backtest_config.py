@@ -2,7 +2,7 @@
 
 
 # 1pip = 0.0001 (EUR/USD = 1.00040 + 1 pips = 1.00050)
-# if latency is >20ms a 2 pip sl is possible. (2pip safe -> 1pip can be rejected!)
+# If latency (Broker order fullfillment time) is >20ms a 2 pip sl is possible. (2pip is safe -> 1pip can be rejected!)
 
 BACKTEST_CONFIG = {
     # Account

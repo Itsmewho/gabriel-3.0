@@ -1,3 +1,5 @@
+# Test config strat
+
 import numpy as np
 from typing import Any, Dict
 from backtester.strategies.base_strat import BaseStrategy
@@ -19,10 +21,8 @@ class RandomEntryStrategyConfig(BaseStrategy):
         )
 
     def on_bar(self, broker, t, row):
-        if broker.open_trades:
-            return
-        if not self._should_fire(t):
-            return
+        if broker.open_trades or not self._should_fire(t):
+            return None
 
         px = float(row["close"])
         side = "buy" if np.random.rand() > 0.5 else "sell"
@@ -42,6 +42,7 @@ class RandomEntryStrategyConfig(BaseStrategy):
         )
         if tr:
             self.setup_trade(broker, tr)
+        return tr
 
 
 class RandomEntryStrategyFixed(BaseStrategy):
@@ -58,10 +59,8 @@ class RandomEntryStrategyFixed(BaseStrategy):
         return t.minute % self.every_n_minutes == 0
 
     def on_bar(self, broker, t, row):
-        if broker.open_trades:
-            return
-        if not self._should_fire(t):
-            return
+        if broker.open_trades or not self._should_fire(t):
+            return None
 
         px = float(row["close"])
         side = "buy" if np.random.rand() > 0.5 else "sell"
@@ -81,3 +80,4 @@ class RandomEntryStrategyFixed(BaseStrategy):
             tr.near_tp_buffer_pips = 2
             tr.tp_extension_pips = 3
             # No break-even in fixed variant
+        return tr

@@ -1,3 +1,5 @@
+# Base strat
+
 from typing import Any, Dict
 from backtester.broker.main_broker import Broker, Trade
 
@@ -6,6 +8,7 @@ class BaseStrategy:
     def __init__(self, symbol: str, config: Dict[str, Any]):
         self.symbol = symbol
         self.config = config or {}
+        self.name = self.config.get("name", self.__class__.__name__)
 
     def setup_trade(self, broker: Broker, tr: Trade):
         # Break-even

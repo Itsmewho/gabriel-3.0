@@ -1,3 +1,5 @@
+# backtester
+
 from __future__ import annotations
 import pandas as pd
 import numpy as np
@@ -9,15 +11,22 @@ from utils.helpers import setup_logger
 # Logger
 logger = setup_logger(__name__)
 
-# Auditor
+# Global Config
+from backtester.config.backtest_config import BACKTEST_CONFIG
+
+# Auditors
+from backtester.account_management.account_audit import export_account_audit
 from backtester.broker.audit import (
     audit_trades,
     audit_rejections,
     audit_max_open_trades,
 )
 
-# Global Config
-from backtester.config.backtest_config import BACKTEST_CONFIG
+# Account management
+from backtester.account_management import (
+    Ledger,
+)
+
 
 # TODO: add a config for strategies ( so each stat can have his own trading params)
 # Dummy  strategies
@@ -92,51 +101,12 @@ if __name__ == "__main__":
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
-    first_ts = market_data.index[0]
-    first_px = float(market_data.iloc[0]["close"])
-
-    lot_sizes = [
-        0.50,
-        0.35,
-        0.20,
-        0.10,
-    ]  # different sizes → should margin-call biggest loss first
-    opened_ids = []
-    for lots in lot_sizes:
-        tr = broker.open_trade(
-            side="buy",
-            price=first_px,
-            wanted_lots=lots,
-            sl_pips=10000,  # very wide: ensure only margin closes them
-            tp_pips=10000,
-            t=first_ts,
-            fallbacks=[],  # no fallbacks; if one size fails, we learn from rejection
-        )
-        if tr:
-            opened_ids.append((tr.id, lots))
-    print(f"Opened trades: {opened_ids}")
-
-    # 2) Drive price sharply down to trigger margin calls
-    steps = 80  # tune if needed
-    shock_px = first_px
-    for s in range(steps):
-        shock_px -= 0.0010  # 10 pips down per step
-        ts = first_ts + pd.Timedelta(minutes=s + 1)
-        broker.on_bar(
-            high=shock_px + 0.00005,
-            low=shock_px - 0.00005,
-            close=shock_px,
-            t=ts,
-        )
-
-    # 3) Close any leftovers at final shock price
-    broker.close_all(shock_px, first_ts + pd.Timedelta(minutes=steps + 1))
-
-    # Instantiate both strategies
+    trade_to_strategy: dict[int, str] = {}  # <-- add
     strategies = [
         RandomEntryStrategyConfig(
             symbol=SYMBOL,
             config={
+                "name": "RAND_CFG",  # <-- set a name for audit
                 "EVERY_N_MINUTES": 30,
                 "LOTS": 0.15,
                 "SL_PIPS": 18,
@@ -152,17 +122,31 @@ if __name__ == "__main__":
                 "FALLBACK_LOTS": [0.10, 0.05],
             },
         ),
-        RandomEntryStrategyFixed(symbol=SYMBOL),
+        RandomEntryStrategyFixed(
+            symbol=SYMBOL, config={"name": "RAND_FIX"}
+        ),  # <-- name
     ]
+    alloc = cfg.INITIAL_BALANCE
+    allocations = {"RAND_CFG": alloc * 0.5, "RAND_FIX": alloc * 0.5}
+    ledger = Ledger(initial_allocations=allocations)
 
     for ts, row in market_data.iterrows():
-        # feed each strategy
         for strat in strategies:
-            strat.on_bar(broker, ts, row)
-        # normal bar handling
+            tr = strat.on_bar(broker, ts, row)  # <-- capture Trade
+            if tr:
+                trade_to_strategy[tr.id] = strat.name
+                ledger.on_open(
+                    strat.name, ts, trade_id=tr.id  # type: ignore
+                )  # record “allocation open”
         broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
 
+    # After sim: attribute PnL back to strategies
+    for tr in broker.trade_history:
+        sid = trade_to_strategy.get(tr.id, "UNKNOWN")
+        ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)  # type: ignore
+
     # Reports
+    export_account_audit(ledger.snapshot_df(), "results/audit/account_ledger.csv")
     audit_trades(broker.trade_history, f"results/audit/{SYMBOL}_trade_audit.csv")
     audit_rejections(broker.rejections, f"results/audit/{SYMBOL}_rejected_trades.csv")
     plot_trades(
