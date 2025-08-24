@@ -64,9 +64,6 @@ def audit_trades(
                 gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,
                 net_pnl=tr.pnl,
                 exit_reason=tr.exit_reason or "Open",
-                # (optional) copy globals to each row for easier filtering in CSV tools
-                initial_balance_global=initial_balance,
-                final_balance_global=final_balance,
             )
         )
 

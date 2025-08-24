@@ -20,6 +20,11 @@ from backtester.broker.audit import (
 from backtester.config.backtest_config import BACKTEST_CONFIG
 
 # TODO: add a config for strategies ( so each stat can have his own trading params)
+# Dummy  strategies
+from backtester.strategies.test_config_strat import (
+    RandomEntryStrategyConfig,
+    RandomEntryStrategyFixed,
+)
 
 # Loaders
 from backtester.data.loaders import fetch_event_features
@@ -87,85 +92,73 @@ if __name__ == "__main__":
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
-    did_manual_long = False
-    did_margin_dummy = False
-    did_weekend_dummy = False
-    weekend_trade_id = None
-    # before the loop
-    did_be_1 = False
-    did_be_2 = False
-    did_be_3 = False
+    first_ts = market_data.index[0]
+    first_px = float(market_data.iloc[0]["close"])
+
+    lot_sizes = [
+        0.50,
+        0.35,
+        0.20,
+        0.10,
+    ]  # different sizes → should margin-call biggest loss first
+    opened_ids = []
+    for lots in lot_sizes:
+        tr = broker.open_trade(
+            side="buy",
+            price=first_px,
+            wanted_lots=lots,
+            sl_pips=10000,  # very wide: ensure only margin closes them
+            tp_pips=10000,
+            t=first_ts,
+            fallbacks=[],  # no fallbacks; if one size fails, we learn from rejection
+        )
+        if tr:
+            opened_ids.append((tr.id, lots))
+    print(f"Opened trades: {opened_ids}")
+
+    # 2) Drive price sharply down to trigger margin calls
+    steps = 80  # tune if needed
+    shock_px = first_px
+    for s in range(steps):
+        shock_px -= 0.0010  # 10 pips down per step
+        ts = first_ts + pd.Timedelta(minutes=s + 1)
+        broker.on_bar(
+            high=shock_px + 0.00005,
+            low=shock_px - 0.00005,
+            close=shock_px,
+            t=ts,
+        )
+
+    # 3) Close any leftovers at final shock price
+    broker.close_all(shock_px, first_ts + pd.Timedelta(minutes=steps + 1))
+
+    # Instantiate both strategies
+    strategies = [
+        RandomEntryStrategyConfig(
+            symbol=SYMBOL,
+            config={
+                "EVERY_N_MINUTES": 30,
+                "LOTS": 0.15,
+                "SL_PIPS": 18,
+                "TP_PIPS": 27,
+                "USE_BREAK_EVEN_STOP": True,
+                "BE_TRIGGER_PIPS": 8,
+                "BE_OFFSET_PIPS": 1,
+                "USE_TRAILING_STOP": True,
+                "TRAILING_STOP_DISTANCE_PIPS": 10,
+                "USE_TP_EXTENSION": True,
+                "NEAR_TP_BUFFER_PIPS": 2,
+                "TP_EXTENSION_PIPS": 3,
+                "FALLBACK_LOTS": [0.10, 0.05],
+            },
+        ),
+        RandomEntryStrategyFixed(symbol=SYMBOL),
+    ]
 
     for ts, row in market_data.iterrows():
-        px = float(row["close"])
-
-        # --- Example 1: once at a specific time ---
-        if (
-            not did_manual_long
-            and ts.date() == pd.to_datetime("2023-08-09").date()  # type: ignore
-            and ts.hour == 9  # type: ignore
-            and ts.minute == 0  # type: ignore
-        ):
-            tr = broker.open_trade(
-                "sell",
-                float(row["close"]),
-                wanted_lots=50,
-                sl_pips=50,
-                tp_pips=50,
-                t=ts,  # type: ignore
-            )
-            if tr:
-                did_manual_long = True  # ← correct flag here
-
-        if (
-            not did_be_1  # type: ignore
-            and ts.date() == pd.to_datetime("2023-08-09").date()  # type: ignore
-            and ts.hour == 9  # type: ignore
-            and ts.minute == 0  # type: ignore
-        ):
-            tr = broker.open_trade(
-                "sell",
-                px,
-                wanted_lots=1.0,
-                sl_pips=50,
-                tp_pips=50,
-                t=ts,  # type: ignore
-                fallbacks=[0.5, 0.25],
-            )
-            if tr:
-                broker.set_break_even(tr.id, be_pips=8)  # 8 pips to BE
-            did_be_1 = False
-
-        # --- Example 2: weekend trade once at Fri 16:00 ---
-        if not did_be_2 and ts.weekday() == 4 and ts.hour == 16 and ts.minute == 0:  # type: ignore
-            tr = broker.open_trade(
-                "buy",
-                px,
-                wanted_lots=0.01,
-                sl_pips=5000,
-                tp_pips=5000,
-                t=ts,  # type: ignore
-                fallbacks=[0.35, 0.15],
-            )
-            if tr:
-                broker.set_break_even(tr.id, be_pips=5)  # 5 pips to BE
-                did_be_2 = False
-
-        # --- Example 3: 6-hour strategy once at first 6h tick after start ---
-        if not did_be_3 and ts.hour % 6 == 0 and ts.minute == 0:  # type: ignore
-            tr = broker.open_trade(
-                side="buy" if np.random.rand() > 0.5 else "sell",
-                price=px,
-                wanted_lots=0.50,
-                sl_pips=10,
-                tp_pips=30,
-                t=ts,  # type: ignore
-                fallbacks=[0.35, 0.15],
-            )
-            if tr:
-                broker.set_break_even(tr.id, be_pips=6)  # 6 pips to BE
-                did_be_3 = False
-
+        # feed each strategy
+        for strat in strategies:
+            strat.on_bar(broker, ts, row)
         # normal bar handling
         broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
 
