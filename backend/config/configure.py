@@ -24,8 +24,7 @@ SMTP_USER: str = get_env_str("SMTP_USER")
 SMTP_PASS: str = get_env_str("SMTP_PASS")
 
 
-# ----- MT5
-
+# --- MT5
 ACCOUNT: str = os.getenv("ACCOUNT_NUM", "")
 ACCOUNT_PASS: str = os.getenv("ACCOUNT_PASS", "")
 META_SERVER: str = os.getenv("META_SERVER", "")
@@ -39,7 +38,7 @@ HTTPONLY: bool = os.getenv("HTTPONLY", "False").lower() == "true"
 SESSION_EXPIRE_SECONDS = int(os.getenv("SESSION_EXPIRE_SECONDS", "60")) * 60
 
 
-# -- API CALL TIMES
+# --- API CALL TIMES
 
 SLEEPTIME: int = 60000
 MODELSLEEPTIME: int = 60000  # 1min?

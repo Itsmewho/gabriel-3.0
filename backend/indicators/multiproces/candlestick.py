@@ -1,8 +1,6 @@
 import pandas as pd
-import numpy as np
 from multiprocessing import Pool, cpu_count
 
-# Import the new worker function
 from .candlestick_worker import process_single_window
 
 

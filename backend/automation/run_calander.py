@@ -63,4 +63,4 @@ def calendar_fetch_service():
     print(blue + "Starting continuous refetch loop for pending actuals..." + reset)
     while True:
         refetch_pending_actuals()
-        time.sleep(600000)
+        time.sleep(864000)
