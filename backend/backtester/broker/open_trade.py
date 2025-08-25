@@ -24,6 +24,8 @@ def open_trade(
     sl_pips: float,
     tp_pips: float,
     t: pd.Timestamp,
+    strategy_id=None,
+    magic=None,
 ) -> tuple[Trade, float]:
     entry = apply_spread(cfg, side, raw_price)
     sl, tp = calc_sl_tp(entry, side, sl_pips, tp_pips)
@@ -42,6 +44,8 @@ def open_trade(
         sl_last=sl,
         tp_first=tp,
         tp_last=tp,
+        strategy_id=strategy_id,
+        magic_number=magic,
     )
 
     fee = commission_open(cfg, lots)  # charged now on account

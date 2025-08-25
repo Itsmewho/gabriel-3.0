@@ -1,4 +1,18 @@
+from dataclasses import dataclass
 import pandas as pd
+from typing import List, Tuple
+
+
+@dataclass
+class EventFilter:
+    # list of (start_ts, end_ts) UTC/naive consistent with your data
+    pause_windows: List[Tuple[pd.Timestamp, pd.Timestamp]]
+
+    def should_pause(self, t: pd.Timestamp) -> bool:
+        for a, b in self.pause_windows:
+            if a <= t <= b:
+                return True
+        return False
 
 
 def add_event_block(

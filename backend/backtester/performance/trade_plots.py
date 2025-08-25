@@ -39,7 +39,7 @@ def plot_trades(
     trades_or_events: Iterable[Any],
     filename: str = "results/tradeplots/trade_plot.png",
     columns: Mapping[str, str] | None = None,
-    markersize: int = 60,
+    markersize: int = 30,
     warn_cap: int | None = None,
     fig_dpi: int = 300,
 ):
@@ -187,7 +187,7 @@ def plot_trades(
     aline_kwargs = {}
     if segments:
         aline_kwargs = dict(
-            alines=dict(alines=segments, colors=seg_colors, linewidths=1.5, alpha=0.9)
+            alines=dict(alines=segments, colors=seg_colors, linewidths=0.7, alpha=0.9)
         )
 
     wtd = warn_cap if warn_cap is not None else len(df) + 1

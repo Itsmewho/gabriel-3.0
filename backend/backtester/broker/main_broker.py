@@ -31,6 +31,8 @@ class Broker:
         self.trading_enabled = True
         self.resume_margin_level_pct = 120.0  # resume when ML% ≥ this
         self.resume_margin_level_pct = cfg.RESUME_MARGIN_LEVEL_PCT
+        self._pending_strategy_id: str | None = None
+        self._pending_magic: int | None = None
 
     def execute_trade(
         self,
@@ -63,11 +65,24 @@ class Broker:
             log(self.events_log, type="rejection", **rej)
             return None
 
-        tr, fee = _open(self._next_id, self.cfg, side, price, lots, sl_pips, tp_pips, t)
+        tr, fee = _open(
+            self._next_id,
+            self.cfg,
+            side,
+            price,
+            lots,
+            sl_pips,
+            tp_pips,
+            t,
+            strategy_id=getattr(self, "_pending_strategy_id", None),
+            magic=getattr(self, "_pending_magic", None),
+        )
         tr.balance_at_open = self.balance  # BEFORE deducting open fee
         self.balance -= fee  # apply open commission
         self.open_trades.append(tr)
         self._next_id += 1
+        self._pending_strategy_id = None
+        self._pending_magic = None
 
         log(
             self.events_log,
@@ -111,12 +126,16 @@ class Broker:
         tp_pips: float,
         t: pd.Timestamp,
         fallbacks: list[float] | None = None,
+        strategy_id: str | None = None,
+        magic: int | None = None,
     ):
         """
         Try wanted_lots, then fallbacks (fractions or absolute lots).
         If none pass margin checks, pause trading and log a 'trading_paused' event.
         """
         if not self.trading_enabled:
+            self._pending_strategy_id = None
+            self._pending_magic = None
             log(
                 self.events_log,
                 type="open_skipped_paused",
@@ -136,6 +155,9 @@ class Broker:
             # fractions of wanted size
             fracs = list(self.cfg.FALLBACK_FRACTIONS)
             candidates = [wanted_lots] + [wanted_lots * f for f in fracs]
+
+        self._pending_strategy_id = strategy_id
+        self._pending_magic = magic
 
         for lots in candidates:
             if lots <= 0:
@@ -166,6 +188,8 @@ class Broker:
 
         # all failed → pause trading
         if self.cfg.AUTO_PAUSE_ON_REJECTION:
+            self._pending_strategy_id = None
+            self._pending_magic = None
             log(
                 self.events_log,
                 type="trading_paused",

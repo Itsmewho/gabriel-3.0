@@ -86,5 +86,9 @@ class Trade:
     near_tp_buffer_pips: float | None = None  # strategy override
     tp_extension_pips: float | None = None  # strategy override
 
+    # ID
+    strategy_id: str | None = None  # e.g. "RAND_CFG"
+    magic_number: int | None = None  # optional MT4/5-style id
+
 
 __all__ = ["PIP_SIZE", "BrokerConfig", "Trade"]

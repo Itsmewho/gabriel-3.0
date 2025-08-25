@@ -15,7 +15,7 @@ def export_account_audit(df: pd.DataFrame, filename: str):
     out = df.copy()
     stats = []
     for sid, g in out.groupby("strategy_id"):
-        eq = g["equity_after"].fillna(method="ffill").fillna(0.0)  # type: ignore
+        eq = g.sort_values("time")["equity_after"].ffill().fillna(0.0)
         peak = eq.cummax().replace(0, 1e-9)
         dd = 1.0 - (eq / peak)
         g = g.assign(drawdown_pct=dd.values)

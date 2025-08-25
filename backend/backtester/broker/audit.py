@@ -64,6 +64,9 @@ def audit_trades(
                 gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,
                 net_pnl=tr.pnl,
                 exit_reason=tr.exit_reason or "Open",
+                # Trade ids
+                strategy_id=getattr(tr, "strategy_id", None),
+                magic_number=getattr(tr, "magic_number", None),
             )
         )
 
