@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 from backtester.broker.main_broker import Broker, Trade
 from backtester.account_management.sizer import AccountSizer
 from backtester.account_management.types import StrategyConfig
-from backtester.broker import PIP_SIZE  # EURUSD pip size (or your symbol map)
+from backtester.broker import PIP_SIZE  # EURUSD pip size
 
 
 class BaseStrategy:

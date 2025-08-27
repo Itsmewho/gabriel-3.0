@@ -94,12 +94,12 @@ def fetch_event_features(symbol, candles_df):
             "created_at",
         ],
     )
+
     df_events["time"] = pd.to_datetime(
         df_events["event_date"].astype(str) + " " + df_events["event_time"].astype(str),
-        utc=True,
+        utc=False,
         errors="coerce",
     )
-    df_events.dropna(subset=["time"], inplace=True)
     df_events.sort_values("time", inplace=True)
     df_events.rename(columns={"time": "event_time_actual"}, inplace=True)
     df_events["impact_score"] = (
@@ -118,7 +118,8 @@ def fetch_event_features(symbol, candles_df):
     df_events["forecast"] = pd.to_numeric(df_events["forecast"], errors="coerce")
     df_events["event_surprise"] = df_events["actual"] - df_events["forecast"]
 
-    candles_df["time"] = pd.to_datetime(candles_df["time"], utc=True)
+    candles_df["time"] = candles_df["time"].dt.tz_localize(None)
+    df_events["event_time_actual"] = df_events["event_time_actual"].dt.tz_localize(None)
 
     # Perform the asof merge
     pre_event_df = pd.merge_asof(
@@ -145,13 +146,17 @@ def fetch_event_features(symbol, candles_df):
         candles_df[col] = default
 
     pre_mask = pre_event_df["event_name"].notna()
-    for col in ["impact_score", "event_name", "forecast", "previous"]:
-        candles_df.loc[pre_mask, f"event_{col}"] = pre_event_df.loc[pre_mask, col]
+    candles_df.loc[pre_mask, "event_impact_score"] = pre_event_df.loc[
+        pre_mask, "impact_score"
+    ]
+    candles_df.loc[pre_mask, "event_name"] = pre_event_df.loc[pre_mask, "event_name"]
+    candles_df.loc[pre_mask, "event_forecast"] = pre_event_df.loc[pre_mask, "forecast"]
+    candles_df.loc[pre_mask, "event_previous"] = pre_event_df.loc[pre_mask, "previous"]
     candles_df.loc[pre_mask, "event_currency"] = pre_event_df.loc[pre_mask, "currency"]
     candles_df.loc[pre_mask, "event_minutes_to_event"] = (
         pre_event_df.loc[pre_mask, "event_time_actual"]
         - pre_event_df.loc[pre_mask, "time"]
-    ).dt.total_seconds() / 60
+    ).dt.total_seconds() / 60.0
 
     post_mask = post_event_df["event_name"].notna()
     candles_df.loc[post_mask, "event_is_economic"] = 1
@@ -159,7 +164,6 @@ def fetch_event_features(symbol, candles_df):
     column_mapping = {
         "actual": "event_actual",
         "event_surprise": "event_surprise",
-        "event_name": "event_name",
         "currency": "event_currency",
     }
     for source_col, dest_col in column_mapping.items():
@@ -174,6 +178,7 @@ def fetch_event_features(symbol, candles_df):
 
     candles_df["event_name_id"] = pd.factorize(candles_df["event_name"])[0]
     candles_df["event_currency_id"] = pd.factorize(candles_df["event_currency"])[0]
+    candles_df.drop(columns=["event_event_name"], errors="ignore", inplace=True)
     candles_df.fillna(get_event_column_defaults(), inplace=True)
 
     return candles_df

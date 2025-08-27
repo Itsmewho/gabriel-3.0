@@ -197,7 +197,7 @@ def plot_trades(
         style="yahoo",
         title="Trade Entries and Exits",
         ylabel="Price",
-        addplot=plots if plots else None,
+        addplot=plots or [],
         figscale=1.4,
         tight_layout=True,
         warn_too_much_data=wtd,

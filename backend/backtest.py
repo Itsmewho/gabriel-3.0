@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Iterable, Tuple
-from concurrent.futures import ProcessPoolExecutor
 from utils.helpers import setup_logger
 
 
@@ -30,20 +29,20 @@ from backtester.account_management import (
 from backtester.account_management.types import StrategyConfig, RiskMode
 from backtester.account_management.govorner import RiskGovernor
 
-# TODO: add a config for strategies ( so each stat can have his own trading params)
-# Dummy  strategies
-from backtester.strategies.test_config_strat import (
-    RandomEntryStrategyConfig,
-    RandomEntryStrategyFixed,
-)
+
+# Strategies to test:
+from backtester.strategies.sma import SMACross
 
 # Loaders
-from backtester.data.loaders import fetch_sql_market_data
+from backtester.data.loaders import fetch_sql_market_data, fetch_event_features
+from backtester.features.features_cache import ensure_feature_parquet
 
 # Evals
+from backtester.performance.evaluation import trades_to_df
 from backtester.performance.trade_plots import plot_trades
 from backtester.performance.trade_svg import export_trades_csv
 from backtester.performance.evaluation import evaluate
+from backtester.performance.regime_eval import regime_report
 
 # Broker
 from backtester.broker import BrokerConfig
@@ -62,27 +61,36 @@ def prepare_data(
         cache_dir / f"{symbol}_{timeframe}_{start_date}_{end_date}_features.parquet"
     )
 
-    if data_file.exists() and not force_reload:
-        logger.info(f"Loading cached feature data from {data_file}...")
-        return pd.read_parquet(data_file)
+    if force_reload and data_file.exists():
+        try:
+            data_file.unlink()
+            logger.info(f"Force reload: deleted {data_file}")
+        except Exception as e:
+            logger.warning(f"Could not delete cache {data_file}: {e}")
 
-    logger.info("No cache found or reload forced. Fetching and processing new data...")
-    where_clause = f"time >= '{start_date}' AND time <= '{end_date}'"
-    df = fetch_sql_market_data(symbol, timeframe, where_clause)
+    # Ask for only what this run needs; missing cols are appended to the same parquet later.
+    feature_spec = {"sma": [20, 50]}
+
+    df = ensure_feature_parquet(
+        symbol,
+        timeframe,
+        start_date,
+        end_date,
+        spec=feature_spec,
+        with_events=True,
+        cache_dir=str(cache_dir),
+    )
 
     if df.empty:
         logger.error("Failed to fetch market data. Aborting.")
         return pd.DataFrame()
 
-    # Normalize types and index. Use server time (no UTC conversion).
-    df["time"] = pd.to_datetime(df["time"], utc=False, errors="coerce")
-    df = df.dropna(subset=["time"]).sort_values("time").set_index("time")
-    # Keep only what you need for now
-    df = df[["open", "high", "low", "close", "tick_volume"]]
+    if not isinstance(df.index, pd.DatetimeIndex):
+        if "time" in df.columns:
+            df = df.set_index("time")
+    df.index = pd.to_datetime(df.index, utc=False, errors="coerce")
+    df = df.dropna().sort_index()
 
-    # Cache
-    df.to_parquet(data_file)
-    logger.info(f"Saving features to cache file: {data_file}")
     return df
 
 
@@ -110,9 +118,9 @@ def run_period(
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
-    # --- Risk and strategy config ---
+    # # Risk and strategy config (keys match strategy names)
     cfg_map = {
-        "RAND_CFG": StrategyConfig(
+        "SMA_X_KELLY": StrategyConfig(
             risk_mode=RiskMode.HALF_KELLY,
             risk_pct=0.01,
             kelly_p=0.53,
@@ -124,13 +132,13 @@ def run_period(
             max_risk_pct_per_trade=0.02,
             max_concurrent_trades=1,
         ),
-        "RAND_FIX": StrategyConfig(
+        "SMA_X_FIXED": StrategyConfig(
             risk_mode=RiskMode.FIXED,
             risk_pct=0.01,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.02,
+            max_risk_pct_per_trade=0.01,
             max_concurrent_trades=1,
         ),
     }
@@ -138,36 +146,44 @@ def run_period(
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        RandomEntryStrategyConfig(
+        SMACross(
             symbol=symbol,
             config={
-                "name": "RAND_CFG",
-                "EVERY_N_MINUTES": 30,
-                "SL_PIPS": 18,
-                "TP_PIPS": 27,
+                "name": "SMA_X_KELLY",
+                "FAST": 20,
+                "SLOW": 50,
+                "CONFIRM_BARS": 1,
+                "SL_PIPS": 15,
+                "TP_PIPS": 30,
+                "ALLOW_REVERSE": True,
+                "MAX_HOLD_MIN": 0,
                 "USE_BREAK_EVEN_STOP": True,
                 "BE_TRIGGER_PIPS": 8,
                 "BE_OFFSET_PIPS": 1,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 10,
-                "USE_TP_EXTENSION": True,
-                "NEAR_TP_BUFFER_PIPS": 2,
-                "TP_EXTENSION_PIPS": 3,
             },
-            strat_cfg=cfg_map["RAND_CFG"],
+            strat_cfg=cfg_map["SMA_X_KELLY"],
             governor=governor,
         ),
-        RandomEntryStrategyFixed(
+        SMACross(
             symbol=symbol,
-            config={"name": "RAND_FIX"},
-            strat_cfg=cfg_map["RAND_FIX"],
+            config={
+                "name": "SMA_X_FIXED",
+                "FAST": 20,
+                "SLOW": 50,
+                "CONFIRM_BARS": 1,
+                "SL_PIPS": 15,
+                "TP_PIPS": 30,
+                "ALLOW_REVERSE": True,
+                "MAX_HOLD_MIN": 0,
+            },
+            strat_cfg=cfg_map["SMA_X_FIXED"],
             governor=governor,
         ),
     ]
 
-    # Initial allocations per strategy
+    # Allocations
     alloc = cfg.INITIAL_BALANCE
-    allocations = {"RAND_CFG": alloc * 0.5, "RAND_FIX": alloc * 0.5}
+    allocations = {"EV_BRK_KELLY": alloc * 0.5, "EV_BRK_FIXED": alloc * 0.5}
     ledger = Ledger(initial_allocations=allocations)
 
     trade_to_strategy: dict[int, str] = {}
@@ -175,7 +191,7 @@ def run_period(
     # --- Backtest loop ---
     for ts, row in market_data.iterrows():
         for strat in strategies:
-            tr = strat.on_bar(broker, ts, row)
+            tr = strat.on_bar(broker, ts, row)  # type: ignore
             if tr:
                 trade_to_strategy[tr.id] = strat.name
                 ledger.on_open(strat.name, ts, trade_id=tr.id)  # type: ignore
@@ -187,9 +203,6 @@ def run_period(
         ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)  # type: ignore
 
     # --- Reports (period-tagged) ---
-    export_account_audit(
-        ledger.snapshot_df(), f"results/audit/account_ledger_{period_tag}.csv"
-    )
     audit_trades(
         broker.trade_history, f"results/audit/{symbol}_trade_audit_{period_tag}.csv"
     )
@@ -213,6 +226,16 @@ def run_period(
         out_dir="results/metrics",
         symbol=symbol,
         period_tag=period_tag,
+        market_data=market_data,
+        strategies=strategies,
+    )
+    trade_df = trades_to_df(broker.trade_history)
+    regime_report(
+        trade_df,
+        market_data,
+        out_dir="results/metrics/regime",
+        symbol=symbol,
+        period_tag=period_tag,
     )
 
     logger.info(f"Finished period {period_tag} | Final balance: {broker.balance:.2f}")
@@ -233,11 +256,14 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        ("2023-08-01", "2023-08-31"),  # period 1
-        ("2023-09-01", "2023-09-30"),  # period 2
-        ("2023-10-01", "2023-10-31"),  # period 3
-        ("2023-11-01", "2023-11-29"),  # period 4
-        ("2025-08-01", "2025-08-25"),  # period 5
+        ("2008-05-01", "2009-02-09"),  # Bank collapse
+        ("2017-04-01", "2018-04-01"),  # bull market
+        ("2021-05-01", "2022-10-15"),  # bear (covid bullshit)
+        ("2023-02-01", "2024-09-02"),  # consolidation periode ( after covid )
+        (
+            "2014-11-01",
+            "2024-11-01",
+        ),  # contains bull / bear and consolidation periodes.
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

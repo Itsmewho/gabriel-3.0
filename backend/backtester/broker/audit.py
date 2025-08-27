@@ -97,6 +97,8 @@ def audit_rejections(
         "free_margin_after",
         "needed_balance",
         "reason",
+        "magic_number",
+        "strategy_id",
     ]
     rows = []
     for r in rejections:
@@ -116,6 +118,8 @@ def audit_rejections(
                 "free_margin_after": r.get("free_margin_after"),
                 "needed_balance": r.get("needed_balance"),
                 "reason": r.get("reason"),
+                "magic_number": r.get("magic_number"),
+                "strategy_id": r.get("strategy_id"),
             }
         )
     pd.DataFrame(rows, columns=cols).to_csv(filename, index=False)

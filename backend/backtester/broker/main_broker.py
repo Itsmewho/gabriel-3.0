@@ -60,6 +60,8 @@ class Broker:
                 "needed_balance": diag["needed_balance"],
                 "running_balance": self.balance,
                 "reason": "Insufficient margin",
+                "strategy_id": getattr(self, "_pending_strategy_id", None),
+                "magic_number": getattr(self, "_pending_magic", None),
             }
             self.rejections.append(rej)
             log(self.events_log, type="rejection", **rej)
@@ -182,6 +184,8 @@ class Broker:
                 "free_margin_after": diag["free_margin_after"],
                 "needed_balance": diag["needed_balance"],
                 "reason": "Insufficient margin (fallback try)",
+                "strategy_id": getattr(self, "_pending_strategy_id", None),
+                "magic_number": getattr(self, "_pending_magic", None),
             }
             self.rejections.append(rej)
             log(self.events_log, type="rejection", **rej)

@@ -86,4 +86,17 @@ class Ledger:
                         "trade_id": e.trade_id,
                     }
                 )
-        return pd.DataFrame(rows).sort_values("time")
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "time",
+                    "strategy_id",
+                    "kind",
+                    "amount",
+                    "equity_before",
+                    "equity_after",
+                    "trade_id",
+                ]
+            )
+        return df.sort_values("time")

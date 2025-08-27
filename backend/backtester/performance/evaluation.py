@@ -1,11 +1,14 @@
 from __future__ import annotations
 import math
 from pathlib import Path
-from typing import Iterable, Dict, Any, Tuple
+from typing import Iterable, Dict, Any, Tuple, Mapping, List
 import pandas as pd
 import numpy as np
+import mplfinance as mpf
+from concurrent.futures import ProcessPoolExecutor
 
 from backtester.broker import Trade
+
 
 # -----------------------------
 # Core dataframe builders
@@ -42,26 +45,34 @@ def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
             )
         )
     df = pd.DataFrame(rows)
-    if df.empty:
-        return df
 
-    # Sort trades chronologically by exit time
+    for col, val in [
+        ("entry_time", pd.NaT),
+        ("exit_time", pd.NaT),
+        ("pnl", 0.0),
+        ("balance_at_open", np.nan),
+        ("side", ""),
+        ("gross_profit_component", 0.0),
+        ("gross_loss_component", 0.0),
+        ("ret", np.nan),
+    ]:
+        if col not in df.columns:
+            df[col] = val
+
+    if df.empty:
+        return df  # now has required columns, so downstream code won’t KeyError
+
     df = df.sort_values(["exit_time", "entry_time"], na_position="last").reset_index(
         drop=True
     )
-
-    # Add calculated columns
     df["duration_minutes"] = (
         df["exit_time"] - df["entry_time"]
     ).dt.total_seconds() / 60.0
     df["is_win"] = df["pnl"] > 0
     df["gross_profit_component"] = df["pnl"].where(df["pnl"] > 0, 0.0)
     df["gross_loss_component"] = -df["pnl"].where(df["pnl"] < 0, 0.0)
-
-    # Calculate per-trade return proxy, avoiding division by zero
     with np.errstate(divide="ignore", invalid="ignore"):
         df["ret"] = df["pnl"] / df["balance_at_open"].replace(0.0, np.nan)
-
     return df
 
 
@@ -396,6 +407,346 @@ def _render_text_simple(
 
 
 # -----------------------------
+# Plotting
+# -----------------------------
+
+
+def _ensure_ohlc_columns(
+    df: pd.DataFrame, columns: Mapping[str, str] | None = None
+) -> pd.DataFrame:
+    dfc = df.copy()
+    want = ["Open", "High", "Low", "Close", "Volume"]
+    # Check for standard names first
+    if all(c in dfc.columns for c in want):
+        return dfc
+
+    # Auto-map common alternative names
+    auto = {
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "tick_volume": "Volume",
+        "vol": "Volume",
+    }
+    mapping = {} if columns is None else dict(columns)
+    if columns is None:
+        for k, v in auto.items():
+            if k in dfc.columns and v not in dfc.columns:
+                mapping[k] = v
+    if mapping:
+        dfc = dfc.rename(columns=mapping)
+
+    # Check for OHLC, but Volume is optional
+    ohlc_want = ["Open", "High", "Low", "Close"]
+    missing = [c for c in ohlc_want if c not in dfc.columns]
+    if missing:
+        raise ValueError(f"Missing OHLC columns after mapping: {missing}")
+    return dfc
+
+
+def plot_trades(
+    market_data: pd.DataFrame,
+    trades_or_events: Iterable[Any],
+    filename: str = "results/plots/trade_plot.png",
+    columns: Mapping[str, str] | None = None,
+    markersize: int = 30,
+    warn_cap: int | None = None,
+    fig_dpi: int = 300,
+    strategy_names: List[str] | None = None,
+):
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    strategy_names = strategy_names or []
+
+    # --- normalize market data index ---
+    df = market_data.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    if df.index.tz is not None:  # type: ignore
+        df.index = df.index.tz_localize(None)  # type: ignore
+
+    df = _ensure_ohlc_columns(df, columns)
+
+    # --- helpers ---
+    def _norm_ts(ts: pd.Timestamp) -> pd.Timestamp:
+        ts = pd.to_datetime(ts)
+        if getattr(ts, "tzinfo", None) is not None:
+            ts = ts.tz_localize(None)
+        return ts
+
+    def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
+        ts = _norm_ts(ts)
+        # Find the index position in the market data for the given timestamp
+        pos = df.index.get_indexer([ts], method="nearest")[0]
+        # Return the actual timestamp from the index
+        return df.index[pos]  # type: ignore
+
+    # --- series for markers ---
+    buy = pd.Series(np.nan, index=df.index, dtype="float64")
+    sell = pd.Series(np.nan, index=df.index, dtype="float64")
+    exitp = pd.Series(np.nan, index=df.index, dtype="float64")
+
+    # Use a DataFrame for easier processing
+    if not isinstance(trades_or_events, pd.DataFrame):
+        trades_df = pd.DataFrame(trades_or_events)
+    else:
+        trades_df = trades_or_events
+
+    # Entries and Exits from the trades_df
+    for _, trade_row in trades_df.iterrows():
+        # Entry
+        entry_time = trade_row.get("entry_time")
+        side = trade_row.get("side")
+        entry_price = trade_row.get("entry_price")
+
+        if pd.notna(entry_time) and pd.notna(side) and pd.notna(entry_price):
+            ts = _norm_ts(entry_time)
+            if side.lower() == "buy":
+                buy.loc[_nearest(ts)] = entry_price  # type: ignore
+            elif side.lower() == "sell":
+                sell.loc[_nearest(ts)] = entry_price  # type: ignore
+
+        # Exit
+        exit_time = trade_row.get("exit_time")
+        exit_price = trade_row.get("exit_price")
+        if pd.notna(exit_time) and pd.notna(exit_price):
+            ts = _norm_ts(exit_time)
+            exitp.loc[_nearest(ts)] = exit_price  # type: ignore
+
+    # Entry→exit line segments
+    segments: list[list[tuple[pd.Timestamp, float]]] = []
+    seg_colors: list[str] = []
+
+    for _, trade_row in trades_df.iterrows():
+        entry_time = trade_row.get("entry_time")
+        exit_time = trade_row.get("exit_time")
+        side = trade_row.get("side")
+        entry_price = trade_row.get("entry_price")
+        exit_price = trade_row.get("exit_price")
+
+        if not all(
+            pd.notna(val)
+            for val in [entry_time, exit_time, side, entry_price, exit_price]
+        ):
+            continue
+
+        ts_entry = _nearest(entry_time)  # type: ignore
+        ts_exit = _nearest(exit_time)  # type: ignore
+
+        segments.append([(ts_entry, float(entry_price)), (ts_exit, float(exit_price))])  # type: ignore
+        prof = (
+            (exit_price > entry_price)  # type: ignore
+            if side.lower() == "buy"  # type: ignore
+            else (exit_price < entry_price)  # type: ignore
+        )
+        seg_colors.append("green" if prof else "red")
+
+    # --- Auto-detect and plot features ---
+    feature_plots = []
+    next_panel = 1  # Start counting panels after the main price panel (0)
+
+    # Volume (if available, gets its own panel)
+    show_volume = "Volume" in df.columns
+    if show_volume:
+        next_panel += 1  # Reserve panel 1 for volume
+
+    # SMAs and EMAs (on main panel)
+    ma_cols = [c for c in df.columns if c.startswith("sma_") or c.startswith("ema_")]
+    colors = ["orange", "purple", "brown", "pink", "olive", "cyan"]
+    for i, col in enumerate(ma_cols):
+        feature_plots.append(mpf.make_addplot(df[col], color=colors[i % len(colors)]))
+
+    # Bollinger Bands (on main panel)
+    bb_upper = next(
+        (c for c in df.columns if c.startswith("bb_") and c.endswith("_upper")), None
+    )
+    bb_lower = next(
+        (c for c in df.columns if c.startswith("bb_") and c.endswith("_lower")), None
+    )
+    if bb_upper and bb_lower:
+        feature_plots.append(
+            mpf.make_addplot(df[bb_upper], color="blue", linestyle="--")
+        )
+        feature_plots.append(
+            mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
+        )
+
+    # Ichimoku Cloud (on main panel)
+    ichimoku_fill = {}
+    if "ichimoku_senkou_a" in df.columns and "ichimoku_senkou_b" in df.columns:
+        feature_plots.append(mpf.make_addplot(df["ichimoku_tenkan"], color="cyan"))
+        feature_plots.append(mpf.make_addplot(df["ichimoku_kijun"], color="magenta"))
+        feature_plots.append(
+            mpf.make_addplot(df["ichimoku_chikou"], color="gray", linestyle=":")
+        )
+        # Prepare fill_between dict for the main plot call
+        ichimoku_fill = dict(
+            y1=df["ichimoku_senkou_a"].values,
+            y2=df["ichimoku_senkou_b"].values,
+            where=df["ichimoku_senkou_a"] >= df["ichimoku_senkou_b"],
+            color="green",
+            alpha=0.1,
+        )
+
+    # RSI (on a new panel) - Conditional
+    rsi_cols = [c for c in df.columns if c.startswith("rsi_")]
+    if rsi_cols and any("RSI" in name.upper() for name in strategy_names):
+        for col in rsi_cols:
+            feature_plots.append(
+                mpf.make_addplot(
+                    df[col], panel=next_panel, ylabel="RSI", color="purple"
+                )
+            )
+        # Add overbought/oversold lines
+        feature_plots.append(
+            mpf.make_addplot(
+                pd.Series(70, index=df.index),
+                panel=next_panel,
+                color="red",
+                linestyle="--",
+            )
+        )
+        feature_plots.append(
+            mpf.make_addplot(
+                pd.Series(30, index=df.index),
+                panel=next_panel,
+                color="green",
+                linestyle="--",
+            )
+        )
+        next_panel += 1
+
+    # MACD (on a new panel) - Conditional
+    if "macd" in df.columns and any("MACD" in name.upper() for name in strategy_names):
+        feature_plots.append(
+            mpf.make_addplot(df["macd"], panel=next_panel, ylabel="MACD", color="blue")
+        )
+        feature_plots.append(
+            mpf.make_addplot(df["macd_signal"], panel=next_panel, color="orange")
+        )
+        feature_plots.append(
+            mpf.make_addplot(
+                df["macd_hist"], type="bar", panel=next_panel, color="gray", alpha=0.5
+            )
+        )
+        next_panel += 1
+
+    # --- Combine all plots ---
+    all_plots = []
+
+    # Add trade markers first
+    def _nonempty(s: pd.Series) -> bool:
+        return np.isfinite(s.values).any()  # type: ignore
+
+    if _nonempty(buy):
+        all_plots.append(
+            mpf.make_addplot(
+                buy, type="scatter", marker="^", color="green", markersize=markersize
+            )
+        )
+    if _nonempty(sell):
+        all_plots.append(
+            mpf.make_addplot(
+                sell, type="scatter", marker="v", color="red", markersize=markersize
+            )
+        )
+    if _nonempty(exitp):
+        all_plots.append(
+            mpf.make_addplot(
+                exitp, type="scatter", marker="x", color="blue", markersize=markersize
+            )
+        )
+
+    # Add feature plots
+    all_plots.extend(feature_plots)
+
+    aline_kwargs = {}
+    if segments:
+        aline_kwargs = dict(
+            alines=dict(alines=segments, colors=seg_colors, linewidths=0.7, alpha=0.9)
+        )
+
+    wtd = warn_cap if warn_cap is not None else len(df) + 1
+    mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        title="Trade Entries and Exits",
+        ylabel="Price",
+        addplot=all_plots if all_plots else None,
+        volume=show_volume,
+        figscale=1.4,
+        tight_layout=True,
+        warn_too_much_data=wtd,
+        savefig=dict(fname=filename, dpi=fig_dpi),
+        fill_between=ichimoku_fill if ichimoku_fill else None,
+        **aline_kwargs,
+    )
+    print(f"PNG trade-plot report saved to {filename}")
+    return filename
+
+
+def _plot_best_worst_avg_periods(
+    df_trades: pd.DataFrame,
+    market_data: pd.DataFrame,
+    out_dir: str,
+    period_type: str,  # 'day' or 'week'
+    symbol: str,
+    period_tag: str,
+    strategy_names: List[str],
+):
+    """Identifies and plots the best, worst, and average trading periods."""
+    if df_trades.empty:
+        return
+
+    # Ensure market_data index is timezone-naive before any comparisons
+    md = market_data.copy()
+    if md.index.tz is not None:  # type: ignore
+        md.index = md.index.tz_localize(None)  # type: ignore
+
+    df = df_trades.copy()
+    df["period"] = df["entry_time"].dt.to_period("D" if period_type == "day" else "W")
+
+    period_pnl = df.groupby("period")["pnl"].sum().sort_values()
+
+    if len(period_pnl) < 3:
+        print(
+            f"Not enough data for best/worst/avg {period_type} plots. Need at least 3 distinct periods."
+        )
+        return
+
+    best_period = period_pnl.index[-1]
+    worst_period = period_pnl.index[0]
+    # For average, find the period with PnL closest to the median
+    median_pnl = period_pnl.median()
+    avg_period = (period_pnl - median_pnl).abs().idxmin()
+
+    for p_type, p_val in [
+        ("best", best_period),
+        ("worst", worst_period),
+        ("average", avg_period),
+    ]:
+        trades_in_period = df[df["period"] == p_val]
+
+        start_time = p_val.start_time
+        end_time = p_val.end_time
+
+        market_data_period = md[(md.index >= start_time) & (md.index <= end_time)]
+
+        if market_data_period.empty:
+            continue
+
+        filename = f"{out_dir}/{symbol}_{period_tag}_{p_type}_{period_type}.png"
+        plot_trades(
+            market_data_period,
+            trades_in_period,
+            filename=filename,
+            strategy_names=strategy_names,
+        )
+
+
+# -----------------------------
 # Public API
 # -----------------------------
 
@@ -406,10 +757,10 @@ def evaluate(
     out_dir: str,
     symbol: str,
     period_tag: str | None = None,
+    market_data: pd.DataFrame | None = None,  # Pass market data for plotting
+    strategies: List[Any] | None = None,  # Pass strategies for conditional plotting
 ) -> Dict[str, Any]:
-    """Compute overall + per-strategy + monthly metrics and export a Markdown report.
-    Returns a dict containing the path to the report.
-    """
+    """Compute metrics, generate plots, and export a Markdown report."""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     tag = f"_{period_tag}" if period_tag else ""
 
@@ -450,5 +801,43 @@ def evaluate(
         md_path,
     )
     paths["markdown_report"] = md_path
+
+    # Generate plots if market data is available
+    if market_data is not None:
+        plot_dir = str(Path(out_dir) / "plots")
+        Path(plot_dir).mkdir(exist_ok=True)
+
+        strategy_names = [s.name for s in strategies] if strategies else []
+
+        # Plot for the whole period
+        overall_plot_path = f"{plot_dir}/{symbol}_{tag}_all_trades.png"
+        plot_trades(
+            market_data, df, filename=overall_plot_path, strategy_names=strategy_names
+        )
+        paths["overall_plot"] = overall_plot_path
+
+        # PERFORMANCE: Use a process pool to generate these plots in parallel
+        with ProcessPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for period_type in ["day", "week"]:
+                future = executor.submit(
+                    _plot_best_worst_avg_periods,
+                    df,
+                    market_data,
+                    plot_dir,
+                    period_type,
+                    symbol,
+                    tag,
+                    strategy_names,
+                )
+                futures.append(future)
+            # Wait for all plot generation tasks to complete
+            for future in futures:
+                future.result()
+
+    else:
+        print(
+            "Warning: 'market_data' not provided to evaluate(). Skipping plot generation."
+        )
 
     return paths
