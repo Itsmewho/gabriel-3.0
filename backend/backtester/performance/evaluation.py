@@ -453,10 +453,10 @@ def plot_trades(
     markersize: int = 30,
     warn_cap: int | None = None,
     fig_dpi: int = 300,
-    strategy_names: List[str] | None = None,
+    feature_spec: Dict[str, Any] | None = None,
 ):
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
-    strategy_names = strategy_names or []
+    feature_spec = feature_spec or {}
 
     # --- normalize market data index ---
     df = market_data.copy()
@@ -542,63 +542,69 @@ def plot_trades(
         )
         seg_colors.append("green" if prof else "red")
 
-    # --- Auto-detect and plot features ---
+    # --- Auto-detect and plot features based on feature_spec ---
     feature_plots = []
-    next_panel = 1  # Start counting panels after the main price panel (0)
+    next_panel = 1
 
-    # Volume (if available, gets its own panel)
     show_volume = "Volume" in df.columns
     if show_volume:
-        next_panel += 1  # Reserve panel 1 for volume
+        next_panel += 1
 
-    # SMAs and EMAs (on main panel)
-    ma_cols = [c for c in df.columns if c.startswith("sma_") or c.startswith("ema_")]
+    # SMAs and EMAs
     colors = ["orange", "purple", "brown", "pink", "olive", "cyan"]
-    for i, col in enumerate(ma_cols):
-        feature_plots.append(mpf.make_addplot(df[col], color=colors[i % len(colors)]))
+    color_idx = 0
+    for ma_type in ["sma", "ema"]:
+        if ma_type in feature_spec:
+            for period in feature_spec[ma_type]:
+                col = f"{ma_type}_{period}"
+                if col in df.columns:
+                    feature_plots.append(
+                        mpf.make_addplot(df[col], color=colors[color_idx % len(colors)])
+                    )
+                    color_idx += 1
 
-    # Bollinger Bands (on main panel)
-    bb_upper = next(
-        (c for c in df.columns if c.startswith("bb_") and c.endswith("_upper")), None
-    )
-    bb_lower = next(
-        (c for c in df.columns if c.startswith("bb_") and c.endswith("_lower")), None
-    )
-    if bb_upper and bb_lower:
-        feature_plots.append(
-            mpf.make_addplot(df[bb_upper], color="blue", linestyle="--")
-        )
-        feature_plots.append(
-            mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
-        )
-
-    # Ichimoku Cloud (on main panel)
-    ichimoku_fill = {}
-    if "ichimoku_senkou_a" in df.columns and "ichimoku_senkou_b" in df.columns:
-        feature_plots.append(mpf.make_addplot(df["ichimoku_tenkan"], color="cyan"))
-        feature_plots.append(mpf.make_addplot(df["ichimoku_kijun"], color="magenta"))
-        feature_plots.append(
-            mpf.make_addplot(df["ichimoku_chikou"], color="gray", linestyle=":")
-        )
-        # Prepare fill_between dict for the main plot call
-        ichimoku_fill = dict(
-            y1=df["ichimoku_senkou_a"].values,
-            y2=df["ichimoku_senkou_b"].values,
-            where=df["ichimoku_senkou_a"] >= df["ichimoku_senkou_b"],
-            color="green",
-            alpha=0.1,
-        )
-
-    # RSI (on a new panel) - Conditional
-    rsi_cols = [c for c in df.columns if c.startswith("rsi_")]
-    if rsi_cols and any("RSI" in name.upper() for name in strategy_names):
-        for col in rsi_cols:
+    # Bollinger Bands
+    if "bb" in feature_spec:
+        n = feature_spec["bb"].get("n", 20)
+        bb_upper = f"bb_{n}_upper"
+        bb_lower = f"bb_{n}_lower"
+        if bb_upper in df.columns and bb_lower in df.columns:
             feature_plots.append(
-                mpf.make_addplot(
-                    df[col], panel=next_panel, ylabel="RSI", color="purple"
-                )
+                mpf.make_addplot(df[bb_upper], color="blue", linestyle="--")
             )
-        # Add overbought/oversold lines
+            feature_plots.append(
+                mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
+            )
+
+    # Ichimoku Cloud
+    ichimoku_fill = {}
+    if "ichimoku" in feature_spec:
+        if "ichimoku_senkou_a" in df.columns and "ichimoku_senkou_b" in df.columns:
+            feature_plots.append(mpf.make_addplot(df["ichimoku_tenkan"], color="cyan"))
+            feature_plots.append(
+                mpf.make_addplot(df["ichimoku_kijun"], color="magenta")
+            )
+            feature_plots.append(
+                mpf.make_addplot(df["ichimoku_chikou"], color="gray", linestyle=":")
+            )
+            ichimoku_fill = dict(
+                y1=df["ichimoku_senkou_a"].values,
+                y2=df["ichimoku_senkou_b"].values,
+                where=df["ichimoku_senkou_a"] >= df["ichimoku_senkou_b"],
+                color="green",
+                alpha=0.1,
+            )
+
+    # RSI
+    if "rsi" in feature_spec:
+        for period in feature_spec["rsi"]:
+            col = f"rsi_{period}"
+            if col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[col], panel=next_panel, ylabel="RSI", color="purple"
+                    )
+                )
         feature_plots.append(
             mpf.make_addplot(
                 pd.Series(70, index=df.index),
@@ -617,25 +623,35 @@ def plot_trades(
         )
         next_panel += 1
 
-    # MACD (on a new panel) - Conditional
-    if "macd" in df.columns and any("MACD" in name.upper() for name in strategy_names):
-        feature_plots.append(
-            mpf.make_addplot(df["macd"], panel=next_panel, ylabel="MACD", color="blue")
-        )
-        feature_plots.append(
-            mpf.make_addplot(df["macd_signal"], panel=next_panel, color="orange")
-        )
-        feature_plots.append(
-            mpf.make_addplot(
-                df["macd_hist"], type="bar", panel=next_panel, color="gray", alpha=0.5
+    # MACD
+    if "macd" in feature_spec:
+        if (
+            "macd" in df.columns
+            and "macd_signal" in df.columns
+            and "macd_hist" in df.columns
+        ):
+            feature_plots.append(
+                mpf.make_addplot(
+                    df["macd"], panel=next_panel, ylabel="MACD", color="blue"
+                )
             )
-        )
-        next_panel += 1
+            feature_plots.append(
+                mpf.make_addplot(df["macd_signal"], panel=next_panel, color="orange")
+            )
+            feature_plots.append(
+                mpf.make_addplot(
+                    df["macd_hist"],
+                    type="bar",
+                    panel=next_panel,
+                    color="gray",
+                    alpha=0.5,
+                )
+            )
+            next_panel += 1
 
     # --- Combine all plots ---
     all_plots = []
 
-    # Add trade markers first
     def _nonempty(s: pd.Series) -> bool:
         return np.isfinite(s.values).any()  # type: ignore
 
@@ -658,7 +674,6 @@ def plot_trades(
             )
         )
 
-    # Add feature plots
     all_plots.extend(feature_plots)
 
     aline_kwargs = {}
@@ -668,8 +683,8 @@ def plot_trades(
         )
 
     wtd = warn_cap if warn_cap is not None else len(df) + 1
-    mpf.plot(
-        df,
+
+    plot_kwargs = dict(
         type="candle",
         style="yahoo",
         title="Trade Entries and Exits",
@@ -680,9 +695,14 @@ def plot_trades(
         tight_layout=True,
         warn_too_much_data=wtd,
         savefig=dict(fname=filename, dpi=fig_dpi),
-        fill_between=ichimoku_fill if ichimoku_fill else None,
         **aline_kwargs,
     )
+
+    if ichimoku_fill:
+        plot_kwargs["fill_between"] = ichimoku_fill  # type: ignore
+
+    mpf.plot(df, **plot_kwargs)
+
     print(f"PNG trade-plot report saved to {filename}")
     return filename
 
@@ -691,58 +711,58 @@ def _plot_best_worst_avg_periods(
     df_trades: pd.DataFrame,
     market_data: pd.DataFrame,
     out_dir: str,
-    period_type: str,  # 'day' or 'week'
+    period_type: str,
     symbol: str,
     period_tag: str,
-    strategy_names: List[str],
+    feature_spec: Dict[str, Any] | None = None,
 ):
     """Identifies and plots the best, worst, and average trading periods."""
-    if df_trades.empty:
-        return
-
-    # Ensure market_data index is timezone-naive before any comparisons
     md = market_data.copy()
     if md.index.tz is not None:  # type: ignore
         md.index = md.index.tz_localize(None)  # type: ignore
 
-    df = df_trades.copy()
-    df["period"] = df["entry_time"].dt.to_period("D" if period_type == "day" else "W")
+    all_periods = md.index.to_period("D" if period_type == "day" else "W").unique()  # type: ignore
 
-    period_pnl = df.groupby("period")["pnl"].sum().sort_values()
-
-    if len(period_pnl) < 3:
-        print(
-            f"Not enough data for best/worst/avg {period_type} plots. Need at least 3 distinct periods."
+    if not df_trades.empty:
+        df = df_trades.copy()
+        df["period"] = df["entry_time"].dt.to_period(
+            "D" if period_type == "day" else "W"
         )
+        period_pnl = df.groupby("period")["pnl"].sum()
+    else:
+        period_pnl = pd.Series(dtype=float)
+
+    all_period_pnl = period_pnl.reindex(all_periods, fill_value=0).sort_values()
+
+    if len(all_period_pnl) < 3:
+        print(f"Not enough data for best/worst/avg {period_type} plots.")
         return
 
-    best_period = period_pnl.index[-1]
-    worst_period = period_pnl.index[0]
-    # For average, find the period with PnL closest to the median
-    median_pnl = period_pnl.median()
-    avg_period = (period_pnl - median_pnl).abs().idxmin()
+    best_period = all_period_pnl.index[-1]
+    worst_period = all_period_pnl.index[0]
+    median_pnl = all_period_pnl.median()
+    avg_period = (all_period_pnl - median_pnl).abs().idxmin()
 
     for p_type, p_val in [
         ("best", best_period),
         ("worst", worst_period),
         ("average", avg_period),
     ]:
-        trades_in_period = df[df["period"] == p_val]
-
+        trades_in_period = df_trades[
+            df_trades["entry_time"].dt.to_period("D" if period_type == "day" else "W")
+            == p_val
+        ]
         start_time = p_val.start_time
         end_time = p_val.end_time
-
         market_data_period = md[(md.index >= start_time) & (md.index <= end_time)]
-
         if market_data_period.empty:
             continue
-
         filename = f"{out_dir}/{symbol}_{period_tag}_{p_type}_{period_type}.png"
         plot_trades(
             market_data_period,
             trades_in_period,
             filename=filename,
-            strategy_names=strategy_names,
+            feature_spec=feature_spec,
         )
 
 
@@ -757,8 +777,9 @@ def evaluate(
     out_dir: str,
     symbol: str,
     period_tag: str | None = None,
-    market_data: pd.DataFrame | None = None,  # Pass market data for plotting
-    strategies: List[Any] | None = None,  # Pass strategies for conditional plotting
+    market_data: pd.DataFrame | None = None,
+    strategies: List[Any] | None = None,
+    feature_spec: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Compute metrics, generate plots, and export a Markdown report."""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -807,17 +828,7 @@ def evaluate(
         plot_dir = str(Path(out_dir) / "plots")
         Path(plot_dir).mkdir(exist_ok=True)
 
-        strategy_names = [s.name for s in strategies] if strategies else []
-
-        # Plot for the whole period
-        overall_plot_path = f"{plot_dir}/{symbol}_{tag}_all_trades.png"
-        plot_trades(
-            market_data, df, filename=overall_plot_path, strategy_names=strategy_names
-        )
-        paths["overall_plot"] = overall_plot_path
-
-        # PERFORMANCE: Use a process pool to generate these plots in parallel
-        with ProcessPoolExecutor(max_workers=8) as executor:
+        with ProcessPoolExecutor(max_workers=4) as executor:
             futures = []
             for period_type in ["day", "week"]:
                 future = executor.submit(
@@ -828,10 +839,9 @@ def evaluate(
                     period_type,
                     symbol,
                     tag,
-                    strategy_names,
+                    feature_spec,
                 )
                 futures.append(future)
-            # Wait for all plot generation tasks to complete
             for future in futures:
                 future.result()
 

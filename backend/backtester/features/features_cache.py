@@ -24,6 +24,8 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
         out.add(f"rsi_{int(n)}")
     for n in spec.get("atr", []):
         out.add(f"atr_{int(n)}")
+    for n in spec.get("vol_sma", []):
+        out.add(f"volume_sma_{int(n)}")
     # MACD
     if "macd" in spec:
         out.update(["macd", "macd_signal", "macd_hist"])
@@ -84,6 +86,13 @@ def _sub_spec_for_missing(
             want_atr.append(int(n))
     if want_atr:
         sub["atr"] = want_atr
+
+    want_vol_sma = []
+    for n in spec.get("vol_sma", []):
+        if f"volume_sma_{int(n)}" in missing:
+            want_vol_sma.append(int(n))
+    if want_vol_sma:
+        sub["vol_sma"] = want_vol_sma
 
     if _need(["macd", "macd_signal", "macd_hist"]) and "macd" in spec:
         sub["macd"] = spec["macd"]

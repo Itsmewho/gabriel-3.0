@@ -176,6 +176,12 @@ def apply_basic_features(
     for n in cfg.get("atr", [14]):
         df[f"atr_{n}"] = _atr(df["high"], df["low"], close, int(n))
 
+    # Volume SMA
+    for n in cfg.get("vol_sma", []):
+        df[f"volume_sma_{int(n)}"] = (
+            df["tick_volume"].rolling(int(n), min_periods=int(n)).mean()
+        )
+
     # MACD
     macd_cfg = cfg.get("macd", {"fast": 12, "slow": 26, "signal": 9})
     macd_df = _macd(

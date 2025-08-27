@@ -15,7 +15,7 @@ logger = setup_logger(__name__)
 from backtester.config.backtest_config import BACKTEST_CONFIG
 
 # Auditors
-from backtester.account_management.account_audit import export_account_audit
+# from backtester.account_management.account_audit import export_account_audit
 from backtester.broker.audit import (
     audit_trades,
     audit_rejections,
@@ -31,10 +31,9 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-from backtester.strategies.sma import SMACross
+from backtester.strategies.sma import SmaConfluenceStrategy
 
 # Loaders
-from backtester.data.loaders import fetch_sql_market_data, fetch_event_features
 from backtester.features.features_cache import ensure_feature_parquet
 
 # Evals
@@ -69,7 +68,7 @@ def prepare_data(
             logger.warning(f"Could not delete cache {data_file}: {e}")
 
     # Ask for only what this run needs; missing cols are appended to the same parquet later.
-    feature_spec = {"sma": [20, 50]}
+    feature_spec = {"sma": [12, 20, 50, 150], "vol_sma": [20]}
 
     df = ensure_feature_parquet(
         symbol,
@@ -120,7 +119,7 @@ def run_period(
 
     # # Risk and strategy config (keys match strategy names)
     cfg_map = {
-        "SMA_X_KELLY": StrategyConfig(
+        "SMA_KELLY": StrategyConfig(
             risk_mode=RiskMode.HALF_KELLY,
             risk_pct=0.01,
             kelly_p=0.53,
@@ -130,63 +129,81 @@ def run_period(
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
             max_risk_pct_per_trade=0.02,
-            max_concurrent_trades=1,
+            max_concurrent_trades=5,
         ),
-        "SMA_X_FIXED": StrategyConfig(
+        "SMA_FIXED": StrategyConfig(
             risk_mode=RiskMode.FIXED,
             risk_pct=0.01,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
             max_risk_pct_per_trade=0.01,
-            max_concurrent_trades=1,
+            max_concurrent_trades=5,
         ),
     }
 
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        SMACross(
+        SmaConfluenceStrategy(
             symbol=symbol,
             config={
-                "name": "SMA_X_KELLY",
-                "FAST": 20,
-                "SLOW": 50,
-                "CONFIRM_BARS": 1,
-                "SL_PIPS": 15,
-                "TP_PIPS": 30,
-                "ALLOW_REVERSE": True,
-                "MAX_HOLD_MIN": 0,
-                "USE_BREAK_EVEN_STOP": True,
-                "BE_TRIGGER_PIPS": 8,
-                "BE_OFFSET_PIPS": 1,
+                "name": "SMA_KELLY",
+                "FAST_MA": 12,
+                "SHORT_MA": 20,
+                "MEDIUM_MA": 50,
+                "SLOW_MA": 150,
+                # "SL_PIPS": 20,
+                # "TP_PIPS": 40,
+                "VOLUME_MA": 20,
+                "VOLUME_FACTOR": 1.5,  # (volume must be 50% above average)
+                "USE_BREAK_EVEN_STOP": False,
+                "BE_TRIGGER_PIPS": 10,
+                "BE_OFFSET_PIPS": 2,
+                "USE_TRAILING_STOP": False,
+                "TRAILING_STOP_DISTANCE_PIPS": 10,
+                "USE_TP_EXTENSION": False,
+                "NEAR_TP_BUFFER_PIPS": 2,
+                "TP_EXTENSION_PIPS": 3,
             },
-            strat_cfg=cfg_map["SMA_X_KELLY"],
+            strat_cfg=cfg_map["SMA_KELLY"],
             governor=governor,
         ),
-        SMACross(
+        SmaConfluenceStrategy(
             symbol=symbol,
             config={
-                "name": "SMA_X_FIXED",
-                "FAST": 20,
-                "SLOW": 50,
-                "CONFIRM_BARS": 1,
-                "SL_PIPS": 15,
-                "TP_PIPS": 30,
-                "ALLOW_REVERSE": True,
-                "MAX_HOLD_MIN": 0,
+                "name": "SMA_FIXED",
+                "FAST_MA": 12,
+                "SHORT_MA": 20,
+                "MEDIUM_MA": 50,
+                "SLOW_MA": 150,
+                "SL_PIPS": 20,
+                "TP_PIPS": 40,
+                "VOLUME_MA": 20,
+                "VOLUME_FACTOR": 1.5,  # (volume must be 50% above average)
+                "USE_BREAK_EVEN_STOP": False,
+                "BE_TRIGGER_PIPS": 10,
+                "BE_OFFSET_PIPS": 2,
+                "USE_TRAILING_STOP": False,
+                "TRAILING_STOP_DISTANCE_PIPS": 10,
+                "USE_TP_EXTENSION": True,
+                "NEAR_TP_BUFFER_PIPS": 2,
+                "TP_EXTENSION_PIPS": 3,
             },
-            strat_cfg=cfg_map["SMA_X_FIXED"],
+            strat_cfg=cfg_map["SMA_FIXED"],
             governor=governor,
         ),
     ]
 
     # Allocations
     alloc = cfg.INITIAL_BALANCE
-    allocations = {"EV_BRK_KELLY": alloc * 0.5, "EV_BRK_FIXED": alloc * 0.5}
+    allocations = {"SMA_KELLY": alloc * 0.5, "SMA_FIXED": alloc * 0.5}
     ledger = Ledger(initial_allocations=allocations)
 
     trade_to_strategy: dict[int, str] = {}
+
+    ## for plotting charts.
+    feature_spec = {"sma": [12, 20, 50, 150]}
 
     # --- Backtest loop ---
     for ts, row in market_data.iterrows():
@@ -228,6 +245,7 @@ def run_period(
         period_tag=period_tag,
         market_data=market_data,
         strategies=strategies,
+        feature_spec=feature_spec,
     )
     trade_df = trades_to_df(broker.trade_history)
     regime_report(

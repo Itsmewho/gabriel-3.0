@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Dict, Any, Iterable, Tuple, Optional
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 try:
     from .evaluation import trades_to_df  # optional convenience
@@ -220,14 +219,14 @@ def regime_correlation(
     df_trades_tagged: pd.DataFrame, market_data: pd.DataFrame
 ) -> Tuple[float, float]:
     """
-    Correlate DAILY EURUSD returns with DAILY strategy PnL.
+    Correlate DAILY close-to-close returns with DAILY strategy PnL.
     Returns (pearson_corr, spearman_corr). np.nan if insufficient data.
     """
     if df_trades_tagged.empty:
         return (np.nan, np.nan)
 
     md = _prep_market(market_data)
-    # Daily EURUSD returns
+    # Daily market returns
     daily_px = md["close"].resample("1D").last().dropna()
     daily_ret = daily_px.pct_change().dropna()
 
@@ -249,32 +248,8 @@ def regime_correlation(
 
 
 # -----------------------------
-# Plots & report
+# Markdown export (MD only, no CSV/PNG)
 # -----------------------------
-def _save_heatmap(heatmap_df: pd.DataFrame, out_path: str) -> Optional[str]:
-    if heatmap_df is None or heatmap_df.empty:
-        return None
-    fig, ax = plt.subplots(figsize=(5, 3.5))
-    im = ax.imshow(heatmap_df.values, aspect="auto")
-    ax.set_xticks(range(heatmap_df.shape[1]))
-    ax.set_xticklabels(list(heatmap_df.columns))
-    ax.set_yticks(range(heatmap_df.shape[0]))
-    ax.set_yticklabels(list(heatmap_df.index))
-    ax.set_xlabel("Volatility regime")
-    ax.set_ylabel("Trend regime")
-    ax.set_title("PnL by regime")
-    # add values
-    for i in range(heatmap_df.shape[0]):
-        for j in range(heatmap_df.shape[1]):
-            val = heatmap_df.values[i, j]
-            ax.text(j, i, f"{val:,.0f}", ha="center", va="center", fontsize=8)
-    fig.tight_layout()
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
-    return out_path
-
-
 def _md_table(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return ""
@@ -289,49 +264,37 @@ def export_regime_report(
     symbol: str,
     period_tag: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Export a markdown report only. No CSV. No PNG."""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     tag = f"_{period_tag}" if period_tag else ""
 
-    # Save CSVs
-    paths: Dict[str, Any] = {}
-    fn_base = f"{symbol}{tag}"
-    df_trades_tagged.to_csv(f"{out_dir}/{fn_base}_trades_tagged.csv", index=False)
-    for key, df in summaries.items():
-        df.to_csv(f"{out_dir}/{fn_base}_{key}.csv", index=False)
-
-    # Heatmap
-    heatmap_png = _save_heatmap(
-        summaries["heatmap_df"], f"{out_dir}/{fn_base}_heatmap.png"
-    )
-    if heatmap_png:
-        paths["heatmap"] = heatmap_png
-
-    # Markdown
     md_lines: list[str] = []
     md_lines.append(f"# {symbol} Regime Report")
     if period_tag:
         md_lines.append(f"**Period:** {period_tag}\n")
 
     pear, spear = corr_tuple
-    md_lines.append("## Correlation (daily EURUSD returns vs daily strategy PnL)")
+    md_lines.append("## Correlation (daily returns vs daily strategy PnL)")
     md_lines.append(f"- Pearson: {pear if not np.isnan(pear) else '-'}")
     md_lines.append(f"- Spearman: {spear if not np.isnan(spear) else '-'}\n")
 
     md_lines.append("## Summary by Trend")
-    md_lines.append(_md_table(summaries["trend_summary"]))
+    md_lines.append(_md_table(summaries.get("trend_summary")))  # type: ignore
     md_lines.append("\n## Summary by Volatility")
-    md_lines.append(_md_table(summaries["vol_summary"]))
+    md_lines.append(_md_table(summaries.get("vol_summary")))  # type: ignore
     md_lines.append("\n## Summary by Trend × Vol")
-    md_lines.append(_md_table(summaries["combo_summary"]))
+    md_lines.append(_md_table(summaries.get("combo_summary")))  # type: ignore
 
-    if heatmap_png:
-        md_lines.append(f"\n![PnL by regime]({Path(heatmap_png).name})")
+    # Include heatmap table directly in markdown (no image file)
+    heatmap_df = summaries.get("heatmap_df")
+    if heatmap_df is not None and not heatmap_df.empty:
+        md_lines.append("\n## PnL by Regime (table)")
+        md_lines.append(heatmap_df.to_markdown())
 
-    md_path = f"{out_dir}/{fn_base}_regime.md"
+    md_path = f"{out_dir}/{symbol}{tag}_regime.md"
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_lines))
-    paths["markdown"] = md_path
-    return paths
+    return {"markdown": md_path}
 
 
 # -----------------------------
@@ -352,7 +315,7 @@ def regime_report(
     End-to-end:
       - ensure DataFrame of trades with columns: entry_time, exit_time, pnl, side
       - tag with regimes
-      - summarize and export markdown + csv + heatmap
+      - summarize and export markdown (no CSV/PNG)
     """
     if isinstance(trades_or_df, pd.DataFrame):
         df_trades = trades_or_df.copy()
@@ -376,7 +339,8 @@ def regime_report(
     # Robust empty path
     if df_trades.empty:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-        md = f"{out_dir}/{symbol}_{'_'+period_tag if period_tag else ''}_regime.md"
+        tag = f"_{period_tag}" if period_tag else ""
+        md = f"{out_dir}/{symbol}{tag}_regime.md"
         with open(md, "w", encoding="utf-8") as f:
             f.write(f"# {symbol} Regime Report\n\nNo trades.\n")
         return {"markdown": md}
