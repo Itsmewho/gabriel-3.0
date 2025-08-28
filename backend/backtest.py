@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Iterable, Tuple
-from utils.helpers import setup_logger
+from utils.helpers import setup_logger, green, reset
 
 
 # Logger
@@ -15,7 +15,7 @@ logger = setup_logger(__name__)
 from backtester.config.backtest_config import BACKTEST_CONFIG
 
 # Auditors
-# from backtester.account_management.account_audit import export_account_audit
+from backtester.account_management.account_audit import export_account_audit
 from backtester.broker.audit import (
     audit_trades,
     audit_rejections,
@@ -31,7 +31,9 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-from backtester.strategies.sma import SmaConfluenceStrategy
+from backtester.strategies.rsi import RSIOscillator
+from backtester.strategies.sma import SmaCrossoverSimple
+from backtester.strategies.ema import EmaCrossover
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
@@ -68,7 +70,26 @@ def prepare_data(
             logger.warning(f"Could not delete cache {data_file}: {e}")
 
     # Ask for only what this run needs; missing cols are appended to the same parquet later.
-    feature_spec = {"sma": [12, 20, 50, 150], "vol_sma": [20]}
+    feature_spec = {
+        "sma": [
+            5,
+            8,
+            12,
+            14,
+            18,
+            20,
+            24,
+            40,
+            50,
+            100,
+            130,
+            150,
+            200,
+        ],
+        "vol_sma": [10, 20, 30, 40, 50],
+        "ema": [12, 14, 26, 30],
+        "rsi": [14],
+    }
 
     df = ensure_feature_parquet(
         symbol,
@@ -76,7 +97,7 @@ def prepare_data(
         start_date,
         end_date,
         spec=feature_spec,
-        with_events=True,
+        with_events=False,
         cache_dir=str(cache_dir),
     )
 
@@ -117,93 +138,51 @@ def run_period(
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
-    # # Risk and strategy config (keys match strategy names)
     cfg_map = {
-        "SMA_KELLY": StrategyConfig(
-            risk_mode=RiskMode.HALF_KELLY,
-            risk_pct=0.01,
-            kelly_p=0.53,
-            kelly_rr=1.6,
-            kelly_cap_pct=0.02,
-            lot_min=cfg.VOLUME_MIN,
-            lot_step=cfg.VOLUME_STEP,
-            lot_max=100.0,
-            max_risk_pct_per_trade=0.02,
-            max_concurrent_trades=5,
-        ),
-        "SMA_FIXED": StrategyConfig(
+        "EMA_X": StrategyConfig(
             risk_mode=RiskMode.FIXED,
-            risk_pct=0.01,
+            risk_pct=0.1,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.01,
-            max_concurrent_trades=5,
+            max_risk_pct_per_trade=0.1,
+            max_drawdown_pct=0.3,
+            max_concurrent_trades=2,
         ),
     }
-
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        SmaConfluenceStrategy(
-            symbol=symbol,
+        EmaCrossover(
+            symbol=SYMBOL,
             config={
-                "name": "SMA_KELLY",
-                "FAST_MA": 12,
-                "SHORT_MA": 20,
-                "MEDIUM_MA": 50,
-                "SLOW_MA": 150,
-                # "SL_PIPS": 20,
-                # "TP_PIPS": 40,
-                "VOLUME_MA": 20,
-                "VOLUME_FACTOR": 1.5,  # (volume must be 50% above average)
-                "USE_BREAK_EVEN_STOP": False,
-                "BE_TRIGGER_PIPS": 10,
+                "name": "EMA_X",
+                "FAST_EMA": 12,
+                "SLOW_EMA": 26,
+                "SL_PIPS": 12,
+                "TP_PIPS": 48,
+                "USE_TRAILING_STOP": True,
+                "TRAILING_STOP_DISTANCE_PIPS": 12,
+                "BE_TRIGGER_EXTRA_PIPS": 1,
                 "BE_OFFSET_PIPS": 2,
-                "USE_TRAILING_STOP": False,
-                "TRAILING_STOP_DISTANCE_PIPS": 10,
-                "USE_TP_EXTENSION": False,
-                "NEAR_TP_BUFFER_PIPS": 2,
-                "TP_EXTENSION_PIPS": 3,
             },
-            strat_cfg=cfg_map["SMA_KELLY"],
+            strat_cfg=cfg_map["EMA_X"],
             governor=governor,
-        ),
-        SmaConfluenceStrategy(
-            symbol=symbol,
-            config={
-                "name": "SMA_FIXED",
-                "FAST_MA": 12,
-                "SHORT_MA": 20,
-                "MEDIUM_MA": 50,
-                "SLOW_MA": 150,
-                "SL_PIPS": 20,
-                "TP_PIPS": 40,
-                "VOLUME_MA": 20,
-                "VOLUME_FACTOR": 1.5,  # (volume must be 50% above average)
-                "USE_BREAK_EVEN_STOP": False,
-                "BE_TRIGGER_PIPS": 10,
-                "BE_OFFSET_PIPS": 2,
-                "USE_TRAILING_STOP": False,
-                "TRAILING_STOP_DISTANCE_PIPS": 10,
-                "USE_TP_EXTENSION": True,
-                "NEAR_TP_BUFFER_PIPS": 2,
-                "TP_EXTENSION_PIPS": 3,
-            },
-            strat_cfg=cfg_map["SMA_FIXED"],
-            governor=governor,
-        ),
+        )
     ]
 
     # Allocations
     alloc = cfg.INITIAL_BALANCE
-    allocations = {"SMA_KELLY": alloc * 0.5, "SMA_FIXED": alloc * 0.5}
+    allocations = {"EMA_FXD": alloc * 1}
     ledger = Ledger(initial_allocations=allocations)
 
     trade_to_strategy: dict[int, str] = {}
 
     ## for plotting charts.
-    feature_spec = {"sma": [12, 20, 50, 150]}
+    feature_spec = {
+        "ema": [14, 26],
+        "sma": [150],
+    }
 
     # --- Backtest loop ---
     for ts, row in market_data.iterrows():
@@ -220,6 +199,9 @@ def run_period(
         ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)  # type: ignore
 
     # --- Reports (period-tagged) ---
+    # export_account_audit(
+    #     ledger.snapshot_df(), f"results/audit/account_ledger_{period_tag}.csv"
+    # )
     audit_trades(
         broker.trade_history, f"results/audit/{symbol}_trade_audit_{period_tag}.csv"
     )
@@ -234,9 +216,9 @@ def run_period(
     export_trades_csv(
         broker.trade_history, f"results/evals/{symbol}_trade_report_{period_tag}.csv"
     )
-    audit_max_open_trades(
-        broker.trade_history, f"results/audit/{symbol}_max_open_trades_{period_tag}.csv"
-    )
+    # audit_max_open_trades(
+    #     broker.trade_history, f"results/audit/{symbol}_max_open_trades_{period_tag}.csv"
+    # )
     evaluate(
         broker.trade_history,
         initial_balance=cfg.INITIAL_BALANCE,
@@ -256,7 +238,11 @@ def run_period(
         period_tag=period_tag,
     )
 
-    logger.info(f"Finished period {period_tag} | Final balance: {broker.balance:.2f}")
+    logger.info(
+        green
+        + f"Finished period {period_tag} | Final balance: {broker.balance:.2f}"
+        + reset
+    )
 
 
 # --- Multi-period driver  ---
@@ -274,7 +260,11 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        ("2008-05-01", "2009-02-09"),  # Bank collapse
+        (
+            "2009-10-01",
+            "2010-10-01",
+        ),  # Bank collapse (End periode.  Starts with bull ends with bear)
+        ("2014-01-01", "2015-01-01"),  # Brexit  (bear market)
         ("2017-04-01", "2018-04-01"),  # bull market
         ("2021-05-01", "2022-10-15"),  # bear (covid bullshit)
         ("2023-02-01", "2024-09-02"),  # consolidation periode ( after covid )

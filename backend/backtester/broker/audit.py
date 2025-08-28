@@ -59,6 +59,8 @@ def audit_trades(
                 highest_price=tr.highest_price_during_trade,
                 lowest_price=tr.lowest_price_during_trade,
                 # costs & PnL
+                slippage_open_pips=getattr(tr, "slippage_open_pips", 0.0),
+                slippage_close_pips=getattr(tr, "slippage_close_pips", 0.0),
                 commission=tr.commission_paid,
                 swap=tr.swap_paid,
                 gross_pnl=tr.pnl + tr.commission_paid + tr.swap_paid,

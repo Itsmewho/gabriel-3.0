@@ -41,7 +41,7 @@ def plot_trades(
     columns: Mapping[str, str] | None = None,
     markersize: int = 30,
     warn_cap: int | None = None,
-    fig_dpi: int = 300,
+    fig_dpi: int = 450,
 ):
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
 
@@ -157,7 +157,7 @@ def plot_trades(
 
         segments.append([(ts_entry, float(y_entry)), (ts_exit, float(y_exit))])
         prof = (y_exit > y_entry) if side == "buy" else (y_exit < y_entry)
-        seg_colors.append("green" if prof else "red")
+        seg_colors.append("limegreen" if prof else "orangered")
 
     # Build overlays only if they have data
     def _nonempty(s: pd.Series) -> bool:
@@ -168,19 +168,27 @@ def plot_trades(
     if _nonempty(buy):
         plots.append(
             mpf.make_addplot(
-                buy, type="scatter", marker="^", color="green", markersize=markersize
+                buy,
+                type="scatter",
+                marker="^",
+                color="lightcyan",
+                markersize=markersize,
             )
         )
     if _nonempty(sell):
         plots.append(
             mpf.make_addplot(
-                sell, type="scatter", marker="v", color="red", markersize=markersize
+                sell, type="scatter", marker="v", color="crimson", markersize=markersize
             )
         )
     if _nonempty(exitp):
         plots.append(
             mpf.make_addplot(
-                exitp, type="scatter", marker="x", color="blue", markersize=markersize
+                exitp,
+                type="scatter",
+                marker="x",
+                color="deepskyblue",
+                markersize=markersize,
             )
         )
 
@@ -194,7 +202,7 @@ def plot_trades(
     mpf.plot(
         df,
         type="candle",
-        style="yahoo",
+        style="binancedark",
         title="Trade Entries and Exits",
         ylabel="Price",
         addplot=plots or [],

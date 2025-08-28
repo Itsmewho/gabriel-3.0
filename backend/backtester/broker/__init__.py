@@ -5,6 +5,8 @@ import pandas as pd
 from typing import Optional, List
 
 PIP_SIZE = 0.0001  # EURUSD
+# 1pip = 0.0001 (EUR/USD = 1.00040 + 1 pips = 1.00050)
+# If latency (Broker order fullfillment time) is >20ms a 2 pip sl is possible. (2pip is safe -> 1pip can be rejected!)
 
 
 @dataclass
@@ -57,7 +59,7 @@ class Trade:
     highest_price_during_trade: float = float("-inf")
     lowest_price_during_trade: float = float("inf")
 
-    # SL/TP audit
+    # SL/TP
     sl_first: Optional[float] = None
     sl_last: Optional[float] = None
     sl_mod_count: int = 0
@@ -71,7 +73,7 @@ class Trade:
     commission_paid: float = 0.0  # open + close
     swap_paid: float = 0.0  # cumulative rollover debits
 
-    # balances (for audit)
+    # balances
     balance_at_open: Optional[float] = None  # BEFORE open fee
     balance_at_close: Optional[float] = None  # AFTER close is booked
 
@@ -89,6 +91,9 @@ class Trade:
     # ID
     strategy_id: str | None = None  # e.g. "RAND_CFG"
     magic_number: int | None = None  # optional MT4/5-style id
+
+    slippage_open_pips: float = 0.0
+    slippage_close_pips: float = 0.0
 
 
 __all__ = ["PIP_SIZE", "BrokerConfig", "Trade"]

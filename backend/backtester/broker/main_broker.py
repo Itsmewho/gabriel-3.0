@@ -2,19 +2,19 @@
 
 import pandas as pd
 from typing import List
-from . import BrokerConfig, Trade
+from . import BrokerConfig, Trade, PIP_SIZE
 from .open_trade import open_trade as _open
 from .close_orders import close_trade as _close
 from .margin_calls import (
     can_open_order,
-    needs_warning,
-    needs_stop_out,
+    needs_warning,  # Keep for msg if close-based warnings are used
     pick_worst_trade,
     margin_level_pct,
+    margin_level_pct_worst_bar,
 )
 from .break_even import update_break_even
-from .trailing_sl import update_trailing_sl, update_trailing_tp
-from .cost_engine import swap_cost
+from .trailing_sl import update_trailing_sl
+from .cost_engine import swap_cost, fill_price_on_close, apply_spread
 from .audit import log
 
 
@@ -29,7 +29,6 @@ class Broker:
         self._last_swap_day = None
         self._next_id = 1
         self.trading_enabled = True
-        self.resume_margin_level_pct = 120.0  # resume when ML% ≥ this
         self.resume_margin_level_pct = cfg.RESUME_MARGIN_LEVEL_PCT
         self._pending_strategy_id: str | None = None
         self._pending_magic: int | None = None
@@ -258,90 +257,64 @@ class Broker:
                     time=t,
                 )
 
-            # --- Trailing SL ---
-            update_trailing_sl(
-                tr,
-                high,
-                low,
-                trail_pips=tr.trailing_sl_distance or trail_pips,
-                events_log=self.events_log,
-                t=t,
-            )
-            if tr.trailing_sl_distance or trail_pips:
-                log(
-                    self.events_log,
-                    type="trailing_sl_config",
-                    trade_id=tr.id,
-                    source="per_trade" if tr.trailing_sl_distance else "global",
-                    distance_pips=tr.trailing_sl_distance or trail_pips,
-                    time=t,
+                update_trailing_sl(
+                    tr,
+                    high,
+                    low,
+                    trail_pips=tr.trailing_sl_distance or trail_pips,
+                    events_log=self.events_log,
+                    t=t,
                 )
 
-            # --- Trailing TP ---
-            update_trailing_tp(
-                tr,
-                high,
-                low,
-                cfg=self.cfg,
-                events_log=self.events_log,
-                t=t,
-                near_tp_buffer_pips=tr.near_tp_buffer_pips,
-                tp_extension_pips=tr.tp_extension_pips,
-            )
-            if tr.near_tp_buffer_pips or tr.tp_extension_pips:
-                log(
-                    self.events_log,
-                    type="tp_extend_config",
-                    trade_id=tr.id,
-                    source=(
-                        "per_trade"
-                        if (tr.near_tp_buffer_pips or tr.tp_extension_pips)
-                        else "global"
-                    ),
-                    buffer_pips=tr.near_tp_buffer_pips or self.cfg.NEAR_TP_BUFFER_PIPS,
-                    extension_pips=tr.tp_extension_pips or self.cfg.TP_EXTENSION_PIPS,
-                    time=t,
-                )
-
-            # --- Exit logic ---
             if tr.side == "buy":
-                if low <= (tr.sl or -1e9):
-                    reason = tr.sl_reason or "Stop Loss"
-                    self.close_trade(tr, tr.sl, reason, t)  # type: ignore
+                if tr.sl is not None and low <= tr.sl:
+                    exec_price = fill_price_on_close(self.cfg, "sell", tr.sl)
+                    baseline = apply_spread(self.cfg, "sell", tr.sl)
+                    tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
+                    self.close_trade(tr, exec_price, tr.sl_reason or "Stop Loss", t)
                     continue
-                if high >= (tr.tp or 1e9):
-                    reason = tr.tp_reason or "Take Profit"
-                    self.close_trade(tr, tr.tp, reason, t)  # type: ignore
+                if tr.tp is not None and high >= tr.tp:
+                    exec_price = fill_price_on_close(self.cfg, "sell", tr.tp)
+                    baseline = apply_spread(self.cfg, "sell", tr.tp)
+                    tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
+                    self.close_trade(tr, exec_price, tr.tp_reason or "Take Profit", t)
                     continue
             else:
-                if high >= (tr.sl or 1e9):
-                    reason = tr.sl_reason or "Stop Loss"
-                    self.close_trade(tr, tr.sl, reason, t)  # type: ignore
+                if tr.sl is not None and high >= tr.sl:
+                    exec_price = fill_price_on_close(self.cfg, "buy", tr.sl)
+                    baseline = apply_spread(self.cfg, "buy", tr.sl)
+                    tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
+                    self.close_trade(tr, exec_price, tr.sl_reason or "Stop Loss", t)
                     continue
-                if low <= (tr.tp or -1e9):
-                    reason = tr.tp_reason or "Take Profit"
-                    self.close_trade(tr, tr.tp, reason, t)  # type: ignore
+                if tr.tp is not None and low <= tr.tp:
+                    exec_price = fill_price_on_close(self.cfg, "buy", tr.tp)
+                    baseline = apply_spread(self.cfg, "buy", tr.tp)
+                    tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
+                    self.close_trade(tr, exec_price, tr.tp_reason or "Take Profit", t)
                     continue
 
-        # margin warning
-        if self.open_trades and needs_warning(
-            self.cfg, self.balance, self.open_trades, close
-        ):
-            log(self.events_log, type="margin_warning", time=t)
+        if self.open_trades:
+            ml_worst = margin_level_pct_worst_bar(
+                self.cfg, self.balance, self.open_trades, high, low
+            )
+            if 0 < ml_worst < 90.0:
+                log(self.events_log, type="margin_warning", time=t, ml_worst=ml_worst)
 
-        # stop-out loop at 50% (largest loss first)
-        while self.open_trades and needs_stop_out(
-            self.cfg, self.balance, self.open_trades, close
-        ):
+        while self.open_trades:
+            ml_worst = margin_level_pct_worst_bar(
+                self.cfg, self.balance, self.open_trades, high, low
+            )
+            if ml_worst >= self.cfg.STOP_OUT_LEVEL_PCT:
+                break
             worst = pick_worst_trade(self.cfg, self.open_trades, close)
             if worst is None:
                 break
             self.close_trade(worst, close, "Margin Call", t)
-            log(self.events_log, type="margin_call", time=t)
+            log(self.events_log, type="margin_call", time=t, ml_worst=ml_worst)
 
-        # daily rollover swap once per day
         cur_day = t.date()
         if cur_day != self._last_swap_day:
+
             for tr in self.open_trades:
                 fee = swap_cost(self.cfg, tr, t)
                 if fee:
