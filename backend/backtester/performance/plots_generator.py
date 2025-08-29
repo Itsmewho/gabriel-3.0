@@ -96,6 +96,7 @@ def _plot_trades_on_chart(
     trades_df: pd.DataFrame,
     filename: str,
     feature_spec: Dict[str, Any] | None = None,
+    enable_better_volume: bool = True,
     warn_cap: int | None = None,
 ):
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
@@ -110,8 +111,8 @@ def _plot_trades_on_chart(
 
     df = _ensure_ohlc_columns(df)
 
-    # Only call add_better_volume if the 'Volume' column exists.
-    if "Volume" in df.columns:
+    use_better_volume = enable_better_volume and "Volume" in df.columns
+    if use_better_volume:
         df = add_better_volume(df)
 
     def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
@@ -157,29 +158,38 @@ def _plot_trades_on_chart(
     if np.isfinite(buy.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                buy, type="scatter", marker="^", color="green", markersize=20
+                buy, type="scatter", marker="^", color="lightcyan", markersize=30
             )
         )
     if np.isfinite(sell.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                sell, type="scatter", marker="v", color="crimson", markersize=20
+                sell, type="scatter", marker="v", color="crimson", markersize=30
             )
         )
     if np.isfinite(exitp.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                exitp, type="scatter", marker="x", color="deepskyblue", markersize=20
+                exitp, type="scatter", marker="x", color="deepskyblue", markersize=30
             )
         )
 
     feature_plots = []
-    next_panel = 1
-    volume_panel = 0
+    current_panel = 1
+    volume_panel = -1
+    rsi_panel = -1
 
-    if "Volume" in df.columns:
-        volume_panel = next_panel
-        next_panel += 1
+    if use_better_volume:
+        volume_panel = current_panel
+        current_panel += 1
+
+    has_rsi = "rsi" in feature_spec and any(
+        f"rsi_{p}" in df.columns for p in feature_spec.get("rsi", [])
+    )
+    if has_rsi:
+        rsi_panel = current_panel
+        current_panel += 1
+
     colors = {
         "sma": ["dodgerblue", "palegreen", "gold", "bisque", "violet"],
         "ema": ["lightsteelblue", "magenta", "beige", "aqua", "darkorange"],
@@ -207,19 +217,20 @@ def _plot_trades_on_chart(
             feature_plots.append(
                 mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
             )
-    if "rsi" in feature_spec:
+
+    if has_rsi:
         for period in feature_spec["rsi"]:
             col = f"rsi_{period}"
             if col in df.columns:
                 feature_plots.append(
                     mpf.make_addplot(
-                        df[col], panel=next_panel, ylabel="RSI", color="purple"
+                        df[col], panel=rsi_panel, ylabel="RSI", color="purple"
                     )
                 )
         feature_plots.append(
             mpf.make_addplot(
                 pd.Series(70, index=df.index),
-                panel=next_panel,
+                panel=rsi_panel,
                 color="red",
                 linestyle="--",
             )
@@ -227,17 +238,13 @@ def _plot_trades_on_chart(
         feature_plots.append(
             mpf.make_addplot(
                 pd.Series(30, index=df.index),
-                panel=next_panel,
+                panel=rsi_panel,
                 color="green",
                 linestyle="--",
             )
         )
-        next_panel += 1
 
     add_plots.extend(feature_plots)
-
-    # Use default volume if better volume is not available, otherwise plot better volume
-    use_better_volume = "bv_color" in df.columns and "Volume" in df.columns
 
     if use_better_volume:
         colors = df["bv_color"].unique()
@@ -258,6 +265,7 @@ def _plot_trades_on_chart(
                         secondary_y=False,
                     )
                 )
+
     wtd = warn_cap if warn_cap is not None else len(df) + 1
 
     plot_kwargs = dict(
@@ -273,8 +281,9 @@ def _plot_trades_on_chart(
         warn_too_much_data=wtd,
     )
 
-    if next_panel > 1:
-        ratios = (3,) + (1,) * (next_panel - 1)
+    num_panels = current_panel
+    if num_panels > 1:
+        ratios = (3,) + (1,) * (num_panels - 1)
         plot_kwargs["panel_ratios"] = ratios
 
     if segments:
@@ -389,19 +398,6 @@ def _plot_fixed_periods(
         )
 
 
-def _plot_full_period(
-    df_trades: pd.DataFrame,
-    market_data: pd.DataFrame,
-    out_dir: str,
-    symbol: str,
-    period_tag: str,
-    feature_spec: Dict[str, Any] | None = None,
-):
-    if not market_data.empty:
-        filename = Path(out_dir) / f"{symbol}_{period_tag}_full_period.png"
-        _plot_trades_on_chart(market_data, df_trades, str(filename), feature_spec)
-
-
 def generate_plots(
     trades: Iterable["Trade"],
     market_data: pd.DataFrame,
@@ -415,7 +411,10 @@ def generate_plots(
     tag = f"{period_tag}" if period_tag else "full_period"
     df = trades_to_df(trades)
 
-    with ProcessPoolExecutor(max_workers=6) as executor:
+    with ProcessPoolExecutor(max_workers=3) as executor:
+        # max_workers is tricky keep in mind the max cores of your CPU
+        # 1 worker defined here will exe 4 worker as per process the plot_generator will take up 3
+        # 4 x 3 = 12 is you have a 12 core 24 cpu you can bump it up till 6 == speed up backtesting results :D
         futures = []
         for period_type in ["day", "week"]:
             future = executor.submit(
@@ -433,4 +432,3 @@ def generate_plots(
             future.result()
 
     _plot_fixed_periods(df, market_data, str(plot_dir), symbol, tag, feature_spec)
-    _plot_full_period(df, market_data, str(plot_dir), symbol, tag, feature_spec)

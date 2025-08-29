@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from typing import Iterable, Tuple
 from utils.helpers import setup_logger, green, reset
-
+from concurrent.futures import ProcessPoolExecutor
 
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
@@ -40,6 +40,7 @@ from backtester.performance.plots_generator import generate_plots
 from backtester.performance.md_reports import generate_markdown_report
 from backtester.performance.trade_svg import export_trades_csv
 from backtester.performance.regime_eval import regime_report, trades_to_df
+from backtester.performance.trade_plots import plot_trades
 
 # Broker
 from backtester.broker import BrokerConfig
@@ -263,6 +264,11 @@ def run_period(
         )
 
     # Generate Audit and CSV files
+    plot_trades(
+        market_data,
+        broker.trade_history,
+        str(metrics_dir / f"{symbol}_trade_plot_{period_tag}.png"),
+    )
     export_account_audit(
         ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
     )
@@ -287,11 +293,30 @@ def run_period(
 
 
 def run_periods(
-    symbol: str, timeframe: str, periods: Iterable[Tuple[str, str]], base_seed: int = 42
+    symbol: str,
+    timeframe: str,
+    periods: Iterable[Tuple[str, str]],
+    base_seed: int = 42,
+    max_workers: int = 4,
 ) -> None:
-    for i, (start_date, end_date) in enumerate(periods):
-        seed = None if base_seed is None else base_seed + i
-        run_period(symbol, timeframe, start_date, end_date, seed=seed)
+    """Runs multiple backtest periods in parallel."""
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for i, (start_date, end_date) in enumerate(periods):
+            seed = None if base_seed is None else base_seed + i
+            # Submit each run_period call to the executor
+            future = executor.submit(
+                run_period, symbol, timeframe, start_date, end_date, seed=seed
+            )
+            futures.append(future)
+            logger.info(f"Submitted backtest for period {start_date} to {end_date}")
+
+        # Wait for all futures to complete and handle any exceptions
+        for future in futures:
+            try:
+                future.result()  # This will raise any exceptions from the worker process
+            except Exception as e:
+                logger.error(f"A backtest period failed: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
