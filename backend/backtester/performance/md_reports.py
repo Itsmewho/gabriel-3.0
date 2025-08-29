@@ -1,16 +1,16 @@
+# markdown_report.py
+
 from __future__ import annotations
 import math
 from pathlib import Path
-from typing import Iterable, Dict, Any, Tuple, Mapping, List
+from typing import Iterable, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
-import mplfinance as mpf
-from concurrent.futures import ProcessPoolExecutor
 
 from backtester.broker import Trade
 
 # -----------------------------
-# Core dataframe builders
+# Core DataFrame Builders (self-contained in this file)
 # -----------------------------
 
 
@@ -37,32 +37,9 @@ def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
         )
 
     if not rows:
-        # Return an empty DataFrame but with the expected schema for downstream functions
-        cols = [
-            "id",
-            "strategy_id",
-            "side",
-            "lots",
-            "entry_time",
-            "exit_time",
-            "entry_price",
-            "exit_price",
-            "pnl",
-            "commission",
-            "swap",
-            "exit_reason",
-            "balance_at_open",
-            "duration_minutes",
-            "is_win",
-            "gross_profit_component",
-            "gross_loss_component",
-            "ret",
-        ]
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame()  # Return empty if no trades
 
     df = pd.DataFrame(rows)
-
-    # Coerce all financial columns to numeric types, turning any errors into Not-a-Number (NaN)
     numeric_cols = [
         "lots",
         "entry_price",
@@ -75,7 +52,6 @@ def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Ensure timestamps are timezone-naive to prevent calculation errors
     if "entry_time" in df.columns and pd.api.types.is_datetime64_any_dtype(
         df["entry_time"]
     ):
@@ -85,10 +61,10 @@ def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
     ):
         df["exit_time"] = df["exit_time"].dt.tz_localize(None)
 
-    # CRITICAL: Drop open trades (where exit_time is NaT) before calculating metrics
     df.dropna(subset=["exit_time", "entry_time"], inplace=True)
+    if df.empty:
+        return df
 
-    # Add calculated columns. This will work even if the DataFrame is empty.
     df["duration_minutes"] = (
         df["exit_time"] - df["entry_time"]
     ).dt.total_seconds() / 60.0
@@ -98,12 +74,9 @@ def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
     with np.errstate(divide="ignore", invalid="ignore"):
         df["ret"] = df["pnl"] / df["balance_at_open"].replace(0.0, np.nan)
 
-    # Sort trades chronologically by exit time
-    if not df.empty:
-        df = df.sort_values(
-            ["exit_time", "entry_time"], na_position="last"
-        ).reset_index(drop=True)
-
+    df = df.sort_values(["exit_time", "entry_time"], na_position="last").reset_index(
+        drop=True
+    )
     return df
 
 
@@ -134,11 +107,6 @@ def equity_curve(df_trades: pd.DataFrame, initial_balance: float) -> pd.DataFram
     ec["drawdown_abs"] = dd_abs
     ec["drawdown_pct"] = dd_pct.fillna(0.0)
     return ec
-
-
-# -----------------------------
-# Metric calculators (MT5-like)
-# -----------------------------
 
 
 def mt5_like_metrics(df_trades: pd.DataFrame, initial_balance: float) -> Dict[str, Any]:
@@ -198,6 +166,8 @@ def mt5_like_metrics(df_trades: pd.DataFrame, initial_balance: float) -> Dict[st
         if not loss_streaks.empty
         else 0.0
     )
+
+    # Side-specific metrics
     df_trades["side"] = df_trades["side"].fillna("")
     long_trades = df_trades[df_trades["side"].str.lower() == "buy"]
     short_trades = df_trades[df_trades["side"].str.lower() == "sell"]
@@ -294,7 +264,7 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Equity Drawdown Absolute ($)", ov.get("equity_drawdown_abs_from_initial")),
         ("Total Trades", ov.get("total_trades")),
         (
-            f"Profit Trades (% of total)",  # noqa: F541
+            f"Profit Trades (% of total)",
             f"{fmt(ov.get('profit_trades'))} ({fmt(ov.get('winrate'), is_pct=True)})",
         ),
         ("Largest profit trade", ov.get("largest_profit_trade")),
@@ -308,19 +278,19 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Expected Payoff", ov.get("expected_payoff")),
         ("Sharpe Ratio", ov.get("sharpe_ratio")),
         (
-            f"Balance Drawdown Maximal (%)",  # noqa: F541
+            f"Balance Drawdown Maximal (%)",
             f"{fmt(ov.get('balance_drawdown_pct_max'), is_pct=True)}",
         ),
         (
-            f"Equity Drawdown Relative (%)",  # noqa: F541
+            f"Equity Drawdown Relative (%)",
             f"{fmt(ov.get('equity_drawdown_rel_max'), is_pct=True)}",
         ),
         (
-            f"Short Trades (won %)",  # noqa: F541
+            f"Short Trades (won %)",
             f"{fmt(ov.get('short_trades_count'))} ({fmt(ov.get('short_trades_win_pct'), is_pct=True)})",
         ),
         (
-            f"Long Trades (won %)",  # noqa: F541
+            f"Long Trades (won %)",
             f"{fmt(ov.get('long_trades_count'))} ({fmt(ov.get('long_trades_win_pct'), is_pct=True)})",
         ),
         ("Largest loss trade", ov.get("largest_loss_trade")),
@@ -328,9 +298,8 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Consecutive losses (# trades)", ov.get("max_consecutive_losses_count")),
         ("Consecutive loss ($)", ov.get("max_consecutive_losses_sum")),
     ]
-
     rows = [
-        "| Metric                       | Value         | Metric                         | Value           |",
+        "| Metric                         | Value         | Metric                         | Value           |",
         "|:-------------------------------|--------------:|:-------------------------------|----------------:|",
     ]
     for i in range(max(len(left), len(right))):
@@ -344,7 +313,7 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def _render_text_simple(
+def _render_text_report(
     symbol: str,
     period_tag: str | None,
     overall_df: pd.DataFrame,
@@ -391,363 +360,22 @@ def _render_text_simple(
 
 
 # -----------------------------
-# Plotting
-# -----------------------------
-
-
-def _ensure_ohlc_columns(
-    df: pd.DataFrame, columns: Mapping[str, str] | None = None
-) -> pd.DataFrame:
-    dfc = df.copy()
-    want = ["Open", "High", "Low", "Close", "Volume"]
-    # Check for standard names first
-    if all(c in dfc.columns for c in want):
-        return dfc
-
-    # Auto-map common alternative names
-    auto = {
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "tick_volume": "Volume",
-        "vol": "Volume",
-    }
-    mapping = {} if columns is None else dict(columns)
-    if columns is None:
-        for k, v in auto.items():
-            if k in dfc.columns and v not in dfc.columns:
-                mapping[k] = v
-    if mapping:
-        dfc = dfc.rename(columns=mapping)
-
-    # Check for OHLC, but Volume is optional
-    ohlc_want = ["Open", "High", "Low", "Close"]
-    missing = [c for c in ohlc_want if c not in dfc.columns]
-    if missing:
-        raise ValueError(f"Missing OHLC columns after mapping: {missing}")
-    return dfc
-
-
-def plot_trades(
-    market_data: pd.DataFrame,
-    trades_or_events: Iterable[Any],
-    filename: str = "results/plots/trade_plot.png",
-    columns: Mapping[str, str] | None = None,
-    markersize: int = 30,
-    warn_cap: int | None = None,
-    fig_dpi: int = 400,
-    feature_spec: Dict[str, Any] | None = None,
-):
-    Path(filename).parent.mkdir(parents=True, exist_ok=True)
-    feature_spec = feature_spec or {}
-
-    # --- normalize market data index ---
-    df = market_data.copy()
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    df = df.sort_index()
-    if df.index.tz is not None:  # type: ignore
-        df.index = df.index.tz_localize(None)  # type: ignore
-
-    df = _ensure_ohlc_columns(df, columns)
-
-    # --- helpers ---
-    def _norm_ts(ts: pd.Timestamp) -> pd.Timestamp:
-        ts = pd.to_datetime(ts)
-        if getattr(ts, "tzinfo", None) is not None:
-            ts = ts.tz_localize(None)
-        return ts
-
-    def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
-        ts = _norm_ts(ts)
-        # Find the index position in the market data for the given timestamp
-        pos = df.index.get_indexer([ts], method="nearest")[0]
-        # Return the actual timestamp from the index
-        return df.index[pos]  # type: ignore
-
-    # --- series for markers ---
-    buy = pd.Series(np.nan, index=df.index, dtype="float64")
-    sell = pd.Series(np.nan, index=df.index, dtype="float64")
-    exitp = pd.Series(np.nan, index=df.index, dtype="float64")
-
-    # Use a DataFrame for easier processing
-    if not isinstance(trades_or_events, pd.DataFrame):
-        trades_df = pd.DataFrame(trades_or_events)
-    else:
-        trades_df = trades_or_events
-
-    # Entries and Exits from the trades_df
-    for _, trade_row in trades_df.iterrows():
-        # Entry
-        entry_time = trade_row.get("entry_time")
-        side = trade_row.get("side")
-        entry_price = trade_row.get("entry_price")
-
-        if pd.notna(entry_time) and pd.notna(side) and pd.notna(entry_price):
-            ts = _norm_ts(entry_time)
-            if side.lower() == "buy":
-                buy.loc[_nearest(ts)] = entry_price  # type: ignore
-            elif side.lower() == "sell":
-                sell.loc[_nearest(ts)] = entry_price  # type: ignore
-
-        # Exit
-        exit_time = trade_row.get("exit_time")
-        exit_price = trade_row.get("exit_price")
-        if pd.notna(exit_time) and pd.notna(exit_price):
-            ts = _norm_ts(exit_time)
-            exitp.loc[_nearest(ts)] = exit_price  # type: ignore
-
-    # Entry→exit line segments
-    segments: list[list[tuple[pd.Timestamp, float]]] = []
-    seg_colors: list[str] = []
-
-    for _, trade_row in trades_df.iterrows():
-        entry_time = trade_row.get("entry_time")
-        exit_time = trade_row.get("exit_time")
-        side = trade_row.get("side")
-        entry_price = trade_row.get("entry_price")
-        exit_price = trade_row.get("exit_price")
-
-        if not all(
-            pd.notna(val)
-            for val in [entry_time, exit_time, side, entry_price, exit_price]
-        ):
-            continue
-
-        ts_entry = _nearest(entry_time)  # type: ignore
-        ts_exit = _nearest(exit_time)  # type: ignore
-
-        segments.append([(ts_entry, float(entry_price)), (ts_exit, float(exit_price))])  # type: ignore
-        prof = (
-            (exit_price > entry_price)  # type: ignore
-            if side.lower() == "buy"  # type: ignore
-            else (exit_price < entry_price)  # type: ignore
-        )
-        seg_colors.append("green" if prof else "red")
-
-    # --- Auto-detect and plot features based on feature_spec ---
-    feature_plots = []
-    next_panel = 1
-
-    show_volume = "Volume" in df.columns
-    if show_volume:
-        next_panel += 1
-
-    # SMAs and EMAs
-    colors = {
-        "sma": ["dodgerblue", "palegreen", "gold", "bisque", "violet"],
-        "ema": ["lightsteelblue", "magenta", "beige", "aqua", "darkorange"],
-    }
-    for ma_type in ["sma", "ema"]:
-        if ma_type in feature_spec:
-            for idx, period in enumerate(feature_spec[ma_type]):
-                col = f"{ma_type}_{period}"
-                if col in df.columns:
-                    feature_plots.append(
-                        mpf.make_addplot(
-                            df[col],
-                            color=colors[ma_type][idx % len(colors[ma_type])],
-                            label=f"{ma_type.upper()} {period}",
-                            width=0.5,
-                        )
-                    )
-
-    # Bollinger Bands
-    if "bb" in feature_spec:
-        n = feature_spec["bb"].get("n", 20)
-        bb_upper = f"bb_{n}_upper"
-        bb_lower = f"bb_{n}_lower"
-        if bb_upper in df.columns and bb_lower in df.columns:
-            feature_plots.append(
-                mpf.make_addplot(df[bb_upper], color="blue", linestyle="--")
-            )
-            feature_plots.append(
-                mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
-            )
-
-    # RSI
-    if "rsi" in feature_spec:
-        for period in feature_spec["rsi"]:
-            col = f"rsi_{period}"
-            if col in df.columns:
-                feature_plots.append(
-                    mpf.make_addplot(
-                        df[col], panel=next_panel, ylabel="RSI", color="purple"
-                    )
-                )
-        feature_plots.append(
-            mpf.make_addplot(
-                pd.Series(70, index=df.index),
-                panel=next_panel,
-                color="red",
-                linestyle="--",
-            )
-        )
-        feature_plots.append(
-            mpf.make_addplot(
-                pd.Series(30, index=df.index),
-                panel=next_panel,
-                color="green",
-                linestyle="--",
-            )
-        )
-        next_panel += 1
-
-    # --- Combine all plots ---
-    all_plots = []
-
-    def _nonempty(s: pd.Series) -> bool:
-        return np.isfinite(s.values).any()  # type: ignore
-
-    if _nonempty(buy):
-        all_plots.append(
-            mpf.make_addplot(
-                buy,
-                type="scatter",
-                marker="^",
-                color="lightcyan",
-                markersize=markersize,
-            )
-        )
-    if _nonempty(sell):
-        all_plots.append(
-            mpf.make_addplot(
-                sell, type="scatter", marker="v", color="crimson", markersize=markersize
-            )
-        )
-    if _nonempty(exitp):
-        all_plots.append(
-            mpf.make_addplot(
-                exitp,
-                type="scatter",
-                marker="x",
-                color="deepskyblue",
-                markersize=markersize,
-            )
-        )
-
-    all_plots.extend(feature_plots)
-
-    aline_kwargs = {}
-    if segments:
-        aline_kwargs = dict(
-            alines=dict(alines=segments, colors=seg_colors, linewidths=0.7, alpha=0.9)
-        )
-
-    wtd = warn_cap if warn_cap is not None else len(df) + 1
-
-    plot_kwargs = dict(
-        type="candle",
-        style="binancedark",
-        title="Trade Entries and Exits",
-        ylabel="Price",
-        addplot=all_plots if all_plots else None,
-        volume=show_volume,
-        figscale=1.4,
-        tight_layout=True,
-        warn_too_much_data=wtd,
-        returnfig=True,  # << important
-        **aline_kwargs,
-    )
-
-    fig, axes = mpf.plot(df, **plot_kwargs)
-
-    # Attach legend to the main (price) axis
-    axes[0].legend()
-
-    # Save and clean up
-    fig.savefig(filename, dpi=fig_dpi, bbox_inches="tight")
-    import matplotlib.pyplot as plt
-
-    plt.close(fig)
-
-    print(f"PNG trade-plot report saved to {filename}")
-    return filename
-
-
-def _plot_best_worst_avg_periods(
-    df_trades: pd.DataFrame,
-    market_data: pd.DataFrame,
-    out_dir: str,
-    period_type: str,
-    symbol: str,
-    period_tag: str,
-    feature_spec: Dict[str, Any] | None = None,
-):
-    """Identifies and plots the best, worst, and average trading periods."""
-    df_trades["entry_time"] = pd.to_datetime(df_trades["entry_time"])
-
-    md = market_data.copy()
-    if md.index.tz is not None:  # type: ignore
-        md.index = md.index.tz_localize(None)  # type: ignore
-
-    all_periods = md.index.to_period("D" if period_type == "day" else "W").unique()  # type: ignore
-
-    if not df_trades.empty:
-        df = df_trades.copy()
-        df["period"] = df["entry_time"].dt.to_period(
-            "D" if period_type == "day" else "W"
-        )
-        period_pnl = df.groupby("period")["pnl"].sum()
-    else:
-        period_pnl = pd.Series(dtype=float)
-
-    all_period_pnl = period_pnl.reindex(all_periods, fill_value=0).sort_values()
-
-    if len(all_period_pnl) < 3:
-        print(f"Not enough data for best/worst/avg {period_type} plots.")
-        return
-
-    best_period = all_period_pnl.index[-1]
-    worst_period = all_period_pnl.index[0]
-    median_pnl = all_period_pnl.median()
-    avg_period = (all_period_pnl - median_pnl).abs().idxmin()
-
-    for p_type, p_val in [
-        ("best", best_period),
-        ("worst", worst_period),
-        ("average", avg_period),
-    ]:
-        trades_in_period = df_trades[
-            df_trades["entry_time"].dt.to_period("D" if period_type == "day" else "W")
-            == p_val
-        ]
-        start_time = p_val.start_time
-        end_time = p_val.end_time
-        market_data_period = md[(md.index >= start_time) & (md.index <= end_time)]
-        if market_data_period.empty:
-            continue
-        filename = f"{out_dir}/{symbol}_{period_tag}_{p_type}_{period_type}.png"
-        plot_trades(
-            market_data_period,
-            trades_in_period,
-            filename=filename,
-            feature_spec=feature_spec,
-        )
-
-
-# -----------------------------
 # Public API
 # -----------------------------
 
 
-def evaluate(
+def generate_markdown_report(
     trades: Iterable["Trade"],
     initial_balance: float,
     out_dir: str,
     symbol: str,
     period_tag: str | None = None,
-    market_data: pd.DataFrame | None = None,
-    strategies: List[Any] | None = None,
-    feature_spec: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """Compute metrics, generate plots, and export a Markdown report."""
+) -> str:
+    """Compute metrics and export a Markdown report."""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     tag = f"_{period_tag}" if period_tag else ""
 
     df = trades_to_df(trades)
-    paths: Dict[str, Any] = {}
 
     # Overall metrics
     overall = mt5_like_metrics(df, initial_balance)
@@ -770,8 +398,8 @@ def evaluate(
     monthly_df = pd.DataFrame()
 
     # Markdown report
-    md_path = f"{out_dir}/{symbol}_report{tag}.md"
-    _render_text_simple(
+    md_path = Path(out_dir) / f"{symbol}_report{tag}.md"
+    _render_text_report(
         symbol,
         period_tag,
         overall_df,
@@ -780,35 +408,8 @@ def evaluate(
         best_df,
         mid_df,
         worst_df,
-        md_path,
+        str(md_path),
     )
-    paths["markdown_report"] = md_path
 
-    # Generate plots if market data is available
-    if market_data is not None:
-        plot_dir = str(Path(out_dir) / "plots")
-        Path(plot_dir).mkdir(exist_ok=True)
-
-        with ProcessPoolExecutor(max_workers=4) as executor:
-            futures = []
-            for period_type in ["day", "week"]:
-                future = executor.submit(
-                    _plot_best_worst_avg_periods,
-                    df,
-                    market_data,
-                    plot_dir,
-                    period_type,
-                    symbol,
-                    tag,
-                    feature_spec,
-                )
-                futures.append(future)
-            for future in futures:
-                future.result()
-
-    else:
-        print(
-            "Warning: 'market_data' not provided to evaluate(). Skipping plot generation."
-        )
-
-    return paths
+    print(f"Markdown report saved to {md_path}")
+    return str(md_path)

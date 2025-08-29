@@ -2,7 +2,6 @@ import time
 import json
 from datetime import datetime, timedelta, timezone
 from operations.redis_operations import set_cache
-from operations.sql_operations import get_next_event_time
 from connections.postSQL import get_db_connection
 
 from .run_indicator_pipeline import run_indicator_pipeline

@@ -1,10 +1,9 @@
 import time
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
 from economic_events.scrape_calandar import scrape_forexfactory_day
 from economic_events.store_events import store_forex_events
 from operations.sql_operations import execute_query
 from utils.helpers import green, blue, red, reset
-from config.configure import SLEEPTIME
 
 RUN_CALENDAR_FETCH = False  # True = full, False = gentle
 

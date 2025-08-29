@@ -102,7 +102,7 @@ def run_indicator_pipeline(mode: str = "live", skip_evals: bool = False):
             source_query = f"SELECT * FROM {SOURCE_SCHEMA}.{SOURCE_TABLE} ORDER BY time"
 
         print(f"Loading raw data from '{SOURCE_SCHEMA}.{SOURCE_TABLE}'...")
-        start_time = time.time()
+        start_time = time.time()  # noqa: F841
         df = pd.read_sql(source_query, engine, index_col="time", parse_dates=["time"])
 
         if mode == "live":

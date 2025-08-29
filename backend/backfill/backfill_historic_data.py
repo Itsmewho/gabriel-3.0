@@ -154,7 +154,7 @@ def run_backfill(mode: str):
         print(green + f"Stored {count} new records for {year}." + reset)
         total_records_stored += count
 
-    print(blue + f"\n--- Backfill Complete! ---" + reset)
+    print(blue + f"\n--- Backfill Complete! ---" + reset)  # noqa: F541
     print(
         green
         + f"Total new records added to the database: {total_records_stored}"

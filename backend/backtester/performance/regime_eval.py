@@ -2,13 +2,102 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, Iterable, Tuple, Optional
+from backtester.broker import Trade
 import numpy as np
 import pandas as pd
 
-try:
-    from .evaluation import trades_to_df  # optional convenience
-except Exception:
-    trades_to_df = None  # not required; you can pass a DataFrame directly
+
+def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
+    """Converts an iterable of Trade objects into a pandas DataFrame."""
+    rows = []
+    for t in trades:
+        rows.append(
+            dict(
+                id=getattr(t, "id", None),
+                strategy_id=getattr(t, "strategy_id", None),
+                side=getattr(t, "side", None),
+                lots=getattr(t, "lot_size", np.nan),
+                entry_time=pd.to_datetime(getattr(t, "entry_time", None)),  # type: ignore
+                exit_time=pd.to_datetime(getattr(t, "exit_time", None)),  # type: ignore
+                entry_price=getattr(t, "entry_price", np.nan),
+                exit_price=getattr(t, "exit_price", np.nan),
+                pnl=getattr(t, "pnl", 0.0),
+                commission=getattr(t, "commission_paid", 0.0),
+                swap=getattr(t, "swap_paid", 0.0),
+                exit_reason=getattr(t, "exit_reason", None),
+                balance_at_open=getattr(t, "balance_at_open", np.nan),
+            )
+        )
+
+    if not rows:
+        # Return an empty DataFrame but with the expected schema for downstream functions
+        cols = [
+            "id",
+            "strategy_id",
+            "side",
+            "lots",
+            "entry_time",
+            "exit_time",
+            "entry_price",
+            "exit_price",
+            "pnl",
+            "commission",
+            "swap",
+            "exit_reason",
+            "balance_at_open",
+            "duration_minutes",
+            "is_win",
+            "gross_profit_component",
+            "gross_loss_component",
+            "ret",
+        ]
+        return pd.DataFrame(columns=cols)
+
+    df = pd.DataFrame(rows)
+
+    # Coerce all financial columns to numeric types, turning any errors into Not-a-Number (NaN)
+    numeric_cols = [
+        "lots",
+        "entry_price",
+        "exit_price",
+        "pnl",
+        "commission",
+        "swap",
+        "balance_at_open",
+    ]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Ensure timestamps are timezone-naive to prevent calculation errors
+    if "entry_time" in df.columns and pd.api.types.is_datetime64_any_dtype(
+        df["entry_time"]
+    ):
+        df["entry_time"] = df["entry_time"].dt.tz_localize(None)
+    if "exit_time" in df.columns and pd.api.types.is_datetime64_any_dtype(
+        df["exit_time"]
+    ):
+        df["exit_time"] = df["exit_time"].dt.tz_localize(None)
+
+    # CRITICAL: Drop open trades (where exit_time is NaT) before calculating metrics
+    df.dropna(subset=["exit_time", "entry_time"], inplace=True)
+
+    # Add calculated columns. This will work even if the DataFrame is empty.
+    df["duration_minutes"] = (
+        df["exit_time"] - df["entry_time"]
+    ).dt.total_seconds() / 60.0
+    df["is_win"] = df["pnl"] > 0
+    df["gross_profit_component"] = df["pnl"].where(df["pnl"] > 0, 0.0)
+    df["gross_loss_component"] = -df["pnl"].where(df["pnl"] < 0, 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["ret"] = df["pnl"] / df["balance_at_open"].replace(0.0, np.nan)
+
+    # Sort trades chronologically by exit time
+    if not df.empty:
+        df = df.sort_values(
+            ["exit_time", "entry_time"], na_position="last"
+        ).reset_index(drop=True)
+
+    return df
 
 
 # -----------------------------

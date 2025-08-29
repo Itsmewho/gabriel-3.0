@@ -21,6 +21,8 @@
 #   - results/consensus/average_overlap_summary.csv
 #   - results/consensus/pairwise_agreement_*.csv (agreement rates between strategy pairs)
 #
+# Strategy Signal Overlap Analyzer (with Buy/Sell breakdowns)
+# -----------------------------------------------------------
 import os
 import re
 import glob
@@ -30,10 +32,10 @@ import pandas as pd
 import numpy as np
 
 # ---------------- Config ----------------
-INPUT_GLOB = r"C:\Users\Itsme\Desktop\Gabriel-3.0\backend\z_signal\*.csv"  # <- change to your local folder pattern if needed
+INPUT_GLOB = r"C:\Users\Itsme\Desktop\Gabriel-3.0\backend\z_signal\*.csv"
 TOP_N = 150
-WINDOW_MINUTES = 20
-TRIPLE_WINDOW_MINUTES = 20
+WINDOW_MINUTES = 10
+TRIPLE_WINDOW_MINUTES = 10
 
 OUT_DIR = Path("results/consensus")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -43,16 +45,12 @@ TRIPLE_OUT_DIR = OUT_DIR  # reuse results/consensus
 # -------------- Helpers ---------------
 def _infer_strategy_name_from_filename(fp: str) -> str:
     base = os.path.basename(fp)
-    # Try to extract a tag like "..._trade_audit_YYYY-...csv" -> prefix part
-    # Fallback to stem without extension
     name = os.path.splitext(base)[0]
-    # If strategy is embedded, e.g., "SMA" or "EMA" or "RSI" in filename, keep it
     m = re.search(r"(SMA|EMA|RSI|ICHIMOKU|MACD)[-_]?[A-Z]*", name, re.IGNORECASE)
     return m.group(0).upper() if m else name.upper()
 
 
 def _standardize_columns(df: pd.DataFrame, src: str) -> pd.DataFrame:
-    # Normalize column names (lower-case)
     d = {c: c.strip().lower() for c in df.columns}
     df = df.rename(columns=d)
 
@@ -61,25 +59,20 @@ def _standardize_columns(df: pd.DataFrame, src: str) -> pd.DataFrame:
     if "exit_time" not in df.columns and "close_time" in df.columns:
         df["exit_time"] = df["close_time"]
 
-    # Parse times (after mapping)
     for col in ("entry_time", "exit_time"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
 
-    # Strategy id
     if "strategy_id" not in df.columns:
         if "magic_number" in df.columns:
             df["strategy_id"] = df["magic_number"].astype(str)
         else:
             df["strategy_id"] = _infer_strategy_name_from_filename(src)
 
-    # Side normalize to lower
     if "side" in df.columns:
         df["side"] = df["side"].astype(str).str.lower()
 
-    # Ensure PnL exists
     if "pnl" not in df.columns:
-        # Try net_pnl or profit
         for alt in ["net_pnl", "profit", "pl", "p_l"]:
             if alt in df.columns:
                 df["pnl"] = pd.to_numeric(df[alt], errors="coerce")
@@ -87,7 +80,6 @@ def _standardize_columns(df: pd.DataFrame, src: str) -> pd.DataFrame:
         if "pnl" not in df.columns:
             df["pnl"] = np.nan
 
-    # Keep a trimmed schema we need
     keep = [
         "id",
         "strategy_id",
@@ -114,7 +106,6 @@ def load_all_audits(glob_pat: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(fp)
         except Exception:
-            # try parquet
             try:
                 df = pd.read_parquet(fp)
             except Exception:
@@ -136,17 +127,13 @@ def load_all_audits(glob_pat: str) -> pd.DataFrame:
             ]
         )
     all_df = pd.concat(frames, ignore_index=True)
-    # Drop missing entry_time
     all_df = all_df.dropna(subset=["entry_time"])
     return all_df
 
 
 def bucketize(df: pd.DataFrame, top_n: int) -> Dict[str, pd.DataFrame]:
-    # Winners: largest pnl
     winners = df.sort_values("pnl", ascending=False).groupby("source_file").head(top_n)
-    # Losers: most negative pnl
     losers = df.sort_values("pnl", ascending=True).groupby("source_file").head(top_n)
-    # Average: closest to 0 pnl
     avg_rows = []
     for src, g in df.groupby("source_file"):
         g = g.copy()
@@ -159,16 +146,9 @@ def bucketize(df: pd.DataFrame, top_n: int) -> Dict[str, pd.DataFrame]:
 def calc_overlaps(
     bucket_df: pd.DataFrame, window_min: int
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    For each trade, find other trades from different strategies whose entry_time within window.
-    Returns:
-      - overlap rows (trade vs match with same/diff direction)
-      - pairwise matrix of agreement rate (same side when overlapping)
-    """
     if bucket_df.empty:
         return bucket_df.head(0), pd.DataFrame()
 
-    # Work only with needed cols
     df = bucket_df[
         ["strategy_id", "entry_time", "side", "pnl", "source_file", "id"]
     ].copy()
@@ -176,14 +156,12 @@ def calc_overlaps(
     df["strategy_id"] = df["strategy_id"].astype(str)
     df = df.sort_values("entry_time").reset_index(drop=True)
 
-    # For efficient lookups, split by strategy
     groups = {sid: g.reset_index(drop=True) for sid, g in df.groupby("strategy_id")}
 
     rows = []
     win = pd.Timedelta(minutes=window_min)
     sids = sorted(groups.keys())  # type: ignore
 
-    # Build pairwise overlaps
     for i in range(len(sids)):
         sid_a = sids[i]
         A = groups[sid_a]
@@ -191,7 +169,6 @@ def calc_overlaps(
             sid_b = sids[j]
             B = groups[sid_b]
 
-            # Two-pointer sweep
             pa = 0
             pb = 0
             while pa < len(A) and pb < len(B):
@@ -199,7 +176,6 @@ def calc_overlaps(
                 tb = B.loc[pb, "entry_time"]
                 dt = tb - ta  # type: ignore
                 if abs(dt) <= win:  # type: ignore
-                    # record overlap both ways
                     same_dir = A.loc[pa, "side"] == B.loc[pb, "side"]
                     rows.append(
                         {
@@ -215,7 +191,6 @@ def calc_overlaps(
                             "agree": bool(same_dir),
                         }
                     )
-                    # Advance the earlier one to search for more matches
                     if ta <= tb:  # type: ignore
                         pa += 1
                     else:
@@ -229,14 +204,12 @@ def calc_overlaps(
     if overlaps.empty:
         return overlaps, overlaps
 
-    # Pairwise agreement rate
     pair = (
         overlaps.groupby(["sid_a", "sid_b"])["agree"]
         .agg(overlaps="count", agreement_rate=lambda s: float(s.mean()))
         .reset_index()
     )
 
-    # Make a symmetric matrix
     sid_list = sorted(df["strategy_id"].unique().tolist())
     mat = pd.DataFrame(index=sid_list, columns=sid_list, data=np.nan, dtype=float)
     for _, r in pair.iterrows():
@@ -259,7 +232,7 @@ def write_bucket_outputs(name: str, bucket_df: pd.DataFrame):
     overlaps.to_csv(overlaps_path, index=False)
     pair.to_csv(pair_path)
 
-    # Short summary: how many overlaps and how many agreements total
+    # Pairwise summary
     if not overlaps.empty:
         summary = (
             overlaps.assign(agree_int=overlaps["agree"].astype(int))
@@ -276,15 +249,43 @@ def write_bucket_outputs(name: str, bucket_df: pd.DataFrame):
         summary = pd.DataFrame(
             columns=["sid_a", "sid_b", "overlaps", "agreements", "mean_delta_min"]
         )
-
     summary_path = OUT_DIR / f"{name}_overlap_summary.csv"
     summary.to_csv(summary_path, index=False)
+
+    # NEW: Pairwise side breakdown (Buy/Sell)
+    if not overlaps.empty:
+        # use side_a as the canonical side label for the pair row
+        side_summary = (
+            overlaps.assign(agree_int=overlaps["agree"].astype(int))
+            .groupby(["sid_a", "sid_b", "side_a"])
+            .agg(
+                overlaps=("agree_int", "size"),
+                agreements=("agree_int", "sum"),
+                mean_delta_min=("delta_minutes", "mean"),
+            )
+            .reset_index()
+            .rename(columns={"side_a": "side"})
+        )
+    else:
+        side_summary = pd.DataFrame(
+            columns=[
+                "sid_a",
+                "sid_b",
+                "side",
+                "overlaps",
+                "agreements",
+                "mean_delta_min",
+            ]
+        )
+    side_summary_path = OUT_DIR / f"{name}_pairwise_side_summary.csv"
+    side_summary.to_csv(side_summary_path, index=False)
 
     return {
         "bucket_path": str(bucket_path),
         "overlaps_path": str(overlaps_path),
         "pairwise_path": str(pair_path),
         "summary_path": str(summary_path),
+        "pairwise_side_summary_path": str(side_summary_path),
     }
 
 
@@ -296,76 +297,64 @@ def _canon_strat_tag(s: str) -> str:
         return "EMA"
     if "RSI" in s:
         return "RSI"
-    # extend if you also want MACD/ICHIMOKU later
     return "OTHER"
 
 
 def _prep_for_triple(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
-    # Canonical tags from strategy_id or filename
     src_tag = d["strategy_id"].fillna(d.get("source_file", ""))
     d["canon"] = src_tag.apply(_canon_strat_tag)
-    # keep only SMA/EMA/RSI
     d = d[d["canon"].isin(["SMA", "EMA", "RSI"])]
-    # basic hygiene
     d = d.dropna(subset=["entry_time", "side", "pnl"])
     d["side"] = d["side"].str.lower()
     return d
 
 
-def find_triple_consensus(
-    all_trades: pd.DataFrame, window_min: int = TRIPLE_WINDOW_MINUTES
-):
-    df = _prep_for_triple(all_trades)
+def find_triple_consensus(df_in: pd.DataFrame, window_min: int, label: str):
+    """Find SMA+EMA+RSI within window_min and same direction; write hits+summary with label suffix."""
+    df = _prep_for_triple(df_in)
     if df.empty:
-        print("No SMA/EMA/RSI trades available for triple-consensus.")
+        print(f"[{label}] No SMA/EMA/RSI trades for triple-consensus.")
         return pd.DataFrame(), pd.DataFrame()
 
-    # Split by canon
-    G = {
+    groups = {
         k: v.sort_values("entry_time").reset_index(drop=True)
         for k, v in df.groupby("canon")
     }
-    if not all(tag in G for tag in ("SMA", "EMA", "RSI")):
-        print("Missing at least one of SMA/EMA/RSI in the data.")
+    if not all(tag in groups for tag in ("SMA", "EMA", "RSI")):
+        print(f"[{label}] Missing at least one of SMA/EMA/RSI.")
         return pd.DataFrame(), pd.DataFrame()
 
-    SMA, EMA, RSI = G["SMA"], G["EMA"], G["RSI"]
+    SMA, EMA, RSI = groups["SMA"], groups["EMA"], groups["RSI"]
     win = pd.Timedelta(minutes=window_min)
 
     rows = []
-    # Two-pointer merge for (SMA, EMA), then align RSI
-    i, j = 0, 0
+    i = j = 0
     while i < len(SMA) and j < len(EMA):
         ta = SMA.loc[i, "entry_time"]
         tb = EMA.loc[j, "entry_time"]
-        dt_ab = tb - ta  # type: ignore
-        if abs(dt_ab) <= win:  # type: ignore
-            # find RSI close to the mid-point of (ta,tb) to be fair
-            ref_t = ta + (dt_ab / 2)  # type: ignore
-            # binary search around ref_t
+        dt = tb - ta  # type: ignore
+        if abs(dt) <= win:  # type: ignore
+            ref_t = ta + (dt / 2)  # type: ignore
             k = RSI["entry_time"].searchsorted(ref_t)
-            candidates = []
+            cand = []
             for kk in (k - 2, k - 1, k, k + 1, k + 2):
                 if 0 <= kk < len(RSI):
                     tc = RSI.loc[kk, "entry_time"]
                     if abs(tc - ta) <= win and abs(tc - tb) <= win:  # type: ignore
-                        candidates.append(kk)
-            for kk in candidates:
-                # same direction required
+                        cand.append(kk)
+            for kk in cand:
                 if not (
                     SMA.loc[i, "side"] == EMA.loc[j, "side"] == RSI.loc[kk, "side"]
                 ):
                     continue
                 side = SMA.loc[i, "side"]
-                # collect triplet
                 rows.append(
                     {
-                        # timing
                         "time_sma": ta,
                         "time_ema": tb,
                         "time_rsi": RSI.loc[kk, "entry_time"],
-                        "delta_min_sma_ema": abs(dt_ab).total_seconds() / 60.0,  # type: ignore
+                        "delta_min_sma_ema": abs(dt).total_seconds() / 60.0,  # type: ignore
                         "delta_min_sma_rsi": abs(
                             RSI.loc[kk, "entry_time"] - ta  # type: ignore
                         ).total_seconds()  # type: ignore
@@ -374,26 +363,22 @@ def find_triple_consensus(
                             RSI.loc[kk, "entry_time"] - tb  # type: ignore
                         ).total_seconds()  # type: ignore
                         / 60.0,
-                        # sides
                         "side": side,
-                        # ids
                         "id_sma": SMA.loc[i, "id"],
                         "id_ema": EMA.loc[j, "id"],
                         "id_rsi": RSI.loc[kk, "id"],
                         "file_sma": SMA.loc[i, "source_file"],
                         "file_ema": EMA.loc[j, "source_file"],
                         "file_rsi": RSI.loc[kk, "source_file"],
-                        # pnl
-                        "pnl_sma": float(SMA.loc[i, "pnl"]),  # type: ignore
+                        "pnl_sma": float(
+                            SMA.loc[i, "pnl"]  # type: ignore
+                        ),  # pyright: ignore[reportArgumentType]
                         "pnl_ema": float(EMA.loc[j, "pnl"]),  # type: ignore
                         "pnl_rsi": float(RSI.loc[kk, "pnl"]),  # type: ignore
                     }
                 )
-            # advance earlier of (ta,tb)
-            if ta <= tb:  # type: ignore
-                i += 1
-            else:
-                j += 1
+            i += 1 if ta <= tb else 0
+            j += 1 if tb < ta else 0
         elif ta < tb - win:  # type: ignore
             i += 1
         else:
@@ -401,10 +386,9 @@ def find_triple_consensus(
 
     triples = pd.DataFrame(rows)
     if triples.empty:
-        print("No triple-consensus hits.")
-        return triples, triples
+        print(f"[{label}] No triple-consensus hits.")
+        return triples, pd.DataFrame()
 
-    # Aggregate quality
     triples["pnl_sum"] = triples[["pnl_sma", "pnl_ema", "pnl_rsi"]].sum(axis=1)
     triples["pnl_mean"] = triples[["pnl_sma", "pnl_ema", "pnl_rsi"]].mean(axis=1)
     triples["all_win"] = (
@@ -414,7 +398,7 @@ def find_triple_consensus(
         (triples["pnl_sma"] > 0) | (triples["pnl_ema"] > 0) | (triples["pnl_rsi"] > 0)
     )
 
-    # Summary
+    # Triple overall summary
     summary = pd.DataFrame(
         {
             "hits": [len(triples)],
@@ -430,36 +414,56 @@ def find_triple_consensus(
         }
     )
 
-    # Save
-    triples_path = TRIPLE_OUT_DIR / "triple_consensus_hits.csv"
-    summary_path = TRIPLE_OUT_DIR / "triple_consensus_summary.csv"
+    # NEW: Triple side breakdown (Buy/Sell)
+    side_summary = (
+        triples.groupby("side")
+        .agg(
+            hits=("side", "size"),
+            total_pnl=("pnl_sum", "sum"),
+            mean_pnl=("pnl_sum", "mean"),
+            median_pnl=("pnl_sum", "median"),
+            all_win_rate=("all_win", "mean"),
+            any_win_rate=("any_win", "mean"),
+            mean_delta_min_sma_ema=("delta_min_sma_ema", "mean"),
+            mean_delta_min_sma_rsi=("delta_min_sma_rsi", "mean"),
+            mean_delta_min_ema_rsi=("delta_min_ema_rsi", "mean"),
+        )
+        .reset_index()
+    )
+
+    triples_path = TRIPLE_OUT_DIR / f"triple_consensus_hits_{label}.csv"
+    summary_path = TRIPLE_OUT_DIR / f"triple_consensus_summary_{label}.csv"
+    side_summary_path = TRIPLE_OUT_DIR / f"triple_consensus_side_summary_{label}.csv"
     triples.to_csv(triples_path, index=False)
     summary.to_csv(summary_path, index=False)
-    print(f"Triple-consensus hits: {len(triples)}")
-    print(f"Saved -> {triples_path}")
-    print(f"Saved -> {summary_path}")
+    side_summary.to_csv(side_summary_path, index=False)
+    print(f"[{label}] triple-consensus hits: {len(triples)} -> {triples_path}")
     return triples, summary
 
 
-# ---- run it (re-use all_trades from earlier load) ----
-if not all_trades.empty:
-    _ = find_triple_consensus(all_trades, TRIPLE_WINDOW_MINUTES)
+def run_triple_for_buckets(buckets: Dict[str, pd.DataFrame], window_min: int):
+    for name, bdf in buckets.items():
+        find_triple_consensus(bdf, window_min, label=name)
 
 
 # -------------- Main run --------------
 all_trades = load_all_audits(INPUT_GLOB)
-merged_path = OUT_DIR / "all_trades_merged.csv"
-all_trades.to_csv(merged_path, index=False)
+(OUT_DIR / "all_trades_merged.csv").parent.mkdir(parents=True, exist_ok=True)
+all_trades.to_csv(OUT_DIR / "all_trades_merged.csv", index=False)
 
 if all_trades.empty:
     print("No trades found. Check INPUT_GLOB.")
 else:
     buckets = bucketize(all_trades, TOP_N)
-    outputs = {}
-    for name, bdf in buckets.items():
-        outputs[name] = write_bucket_outputs(name, bdf)
 
-    print("Merged trades:", str(merged_path))
+    # Pairwise outputs (+ side breakdown)
+    outputs = {name: write_bucket_outputs(name, bdf) for name, bdf in buckets.items()}
+
+    # Triple-consensus on ALL + each bucket
+    find_triple_consensus(all_trades, TRIPLE_WINDOW_MINUTES, label="all")
+    run_triple_for_buckets(buckets, TRIPLE_WINDOW_MINUTES)
+
+    print("Merged trades:", str(OUT_DIR / "all_trades_merged.csv"))
     for k, v in outputs.items():
         print(f"[{k}]")
         for label, path in v.items():

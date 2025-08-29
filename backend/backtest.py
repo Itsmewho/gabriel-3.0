@@ -8,9 +8,6 @@ from typing import Iterable, Tuple
 from utils.helpers import setup_logger, green, reset
 
 
-# Logger
-logger = setup_logger(__name__)
-
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
 
@@ -19,7 +16,7 @@ from backtester.account_management.account_audit import export_account_audit
 from backtester.broker.audit import (
     audit_trades,
     audit_rejections,
-    audit_max_open_trades,
+    audit_max_open_trades,  # noqa: F401
 )
 
 # Account management
@@ -31,23 +28,27 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-from backtester.strategies.rsi import RSIOscillator
-from backtester.strategies.sma import SmaCrossoverSimple
+from backtester.strategies.rsi import RSIOscillator  # noqa: F401
+from backtester.strategies.sma import SmaCrossoverSimple  # noqa: F401
 from backtester.strategies.ema import EmaCrossover
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
 
 # Evals
-from backtester.performance.evaluation import trades_to_df
+from backend.backtester.performance.plots_generator import generate_plots
+from backend.backtester.performance.md_reports import generate_markdown_report
 from backtester.performance.trade_plots import plot_trades
 from backtester.performance.trade_svg import export_trades_csv
-from backtester.performance.evaluation import evaluate
-from backtester.performance.regime_eval import regime_report
+from backtester.performance.regime_eval import regime_report, trades_to_df
 
 # Broker
 from backtester.broker import BrokerConfig
 from backtester.broker.main_broker import Broker
+
+
+# Logger
+logger = setup_logger(__name__)
 
 
 # --- Data Preparation & Caching  ---
@@ -79,16 +80,35 @@ def prepare_data(
             18,
             20,
             24,
+            30,
             40,
             50,
-            100,
             130,
             150,
             200,
+            300,
+            400,
         ],
         "vol_sma": [10, 20, 30, 40, 50],
-        "ema": [12, 14, 26, 30],
+        "ema": [
+            5,
+            8,
+            12,
+            14,
+            18,
+            20,
+            24,
+            30,
+            40,
+            50,
+            130,
+            150,
+            200,
+            300,
+            400,
+        ],
         "rsi": [14],
+        "atr": [14],
     }
 
     df = ensure_feature_parquet(
@@ -123,13 +143,8 @@ def run_period(
     if seed is not None:
         np.random.seed(seed)
 
-    # Ensure output dirs
-    Path("results/tradeplots").mkdir(parents=True, exist_ok=True)
-    Path("results/evals").mkdir(parents=True, exist_ok=True)
-    Path("results/audit").mkdir(parents=True, exist_ok=True)
-
+    # --- This part is the same ---
     period_tag = f"{start_date}_{end_date}"
-
     market_data = prepare_data(symbol, timeframe, start_date, end_date)
     if market_data.empty:
         logger.error(f"No market data for period {period_tag}. Skipping.")
@@ -137,7 +152,6 @@ def run_period(
 
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
-
     cfg_map = {
         "EMA_X": StrategyConfig(
             risk_mode=RiskMode.FIXED,
@@ -151,7 +165,6 @@ def run_period(
         ),
     }
     governor = RiskGovernor(cfg_map)
-
     strategies = [
         EmaCrossover(
             symbol=SYMBOL,
@@ -159,84 +172,96 @@ def run_period(
                 "name": "EMA_X",
                 "FAST_EMA": 12,
                 "SLOW_EMA": 26,
-                "SL_PIPS": 12,
-                "TP_PIPS": 48,
-                "USE_TRAILING_STOP": True,
-                "TRAILING_STOP_DISTANCE_PIPS": 12,
-                "BE_TRIGGER_EXTRA_PIPS": 1,
-                "BE_OFFSET_PIPS": 2,
+                "SL_PIPS": 10,
+                "TP_PIPS": 40,
+                "USE_BREAK_EVEN_STOP": False,
+                "USE_TRAILING_STOP": False,
+                "USE_TP_EXTENSION": False,
             },
             strat_cfg=cfg_map["EMA_X"],
             governor=governor,
         )
     ]
 
-    # Allocations
+    if not strategies:
+        logger.error("No strategies defined for this run. Skipping.")
+        return
+    strategy_folder_name = strategies[0].name
+
+    base_out_dir = Path(f"results/{strategy_folder_name}")
+    audit_dir = base_out_dir / "audit"
+    evals_dir = base_out_dir / "evals"
+    metrics_dir = base_out_dir / "metrics"
+    regime_dir = metrics_dir / "regime"
+
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    evals_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- The backtest loop is the same ---
     alloc = cfg.INITIAL_BALANCE
     allocations = {"EMA_FXD": alloc * 1}
     ledger = Ledger(initial_allocations=allocations)
-
     trade_to_strategy: dict[int, str] = {}
+    feature_spec = {"ema": [14, 26], "sma": [150]}
 
-    ## for plotting charts.
-    feature_spec = {
-        "ema": [14, 26],
-        "sma": [150],
-    }
-
-    # --- Backtest loop ---
     for ts, row in market_data.iterrows():
         for strat in strategies:
-            tr = strat.on_bar(broker, ts, row)  # type: ignore
+            tr = strat.on_bar(broker, ts, row)
             if tr:
                 trade_to_strategy[tr.id] = strat.name
                 ledger.on_open(strat.name, ts, trade_id=tr.id)  # type: ignore
         broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
 
-    # Attribute closed PnL back to strategies in the ledger
     for tr in broker.trade_history:
         sid = trade_to_strategy.get(tr.id, "UNKNOWN")
         ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)  # type: ignore
 
-    # --- Reports (period-tagged) ---
-    # export_account_audit(
-    #     ledger.snapshot_df(), f"results/audit/account_ledger_{period_tag}.csv"
-    # )
+    export_account_audit(
+        ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
+    )
     audit_trades(
-        broker.trade_history, f"results/audit/{symbol}_trade_audit_{period_tag}.csv"
+        broker.trade_history, str(audit_dir / f"{symbol}_trade_audit_{period_tag}.csv")
     )
     audit_rejections(
-        broker.rejections, f"results/audit/{symbol}_rejected_trades_{period_tag}.csv"
+        broker.rejections, str(audit_dir / f"{symbol}_rejected_trades_{period_tag}.csv")
+    )
+    export_trades_csv(
+        broker.trade_history, str(evals_dir / f"{symbol}_trade_report_{period_tag}.csv")
     )
     plot_trades(
         market_data,
         broker.trade_history,
-        f"results/tradeplots/{symbol}_trade_plot_{period_tag}.png",
+        str(evals_dir) / f"results/tradeplots/{symbol}_trade_plot_{period_tag}.png",
     )
-    export_trades_csv(
-        broker.trade_history, f"results/evals/{symbol}_trade_report_{period_tag}.csv"
-    )
-    # audit_max_open_trades(
-    #     broker.trade_history, f"results/audit/{symbol}_max_open_trades_{period_tag}.csv"
-    # )
-    evaluate(
-        broker.trade_history,
+
+    generate_markdown_report(
+        trades=broker.trade_history,
         initial_balance=cfg.INITIAL_BALANCE,
-        out_dir="results/metrics",
+        out_dir=str(metrics_dir),
         symbol=symbol,
         period_tag=period_tag,
-        market_data=market_data,
-        strategies=strategies,
-        feature_spec=feature_spec,
     )
+
+    if market_data is not None:
+        generate_plots(
+            trades=broker.trade_history,
+            market_data=market_data,
+            out_dir=str(metrics_dir),
+            symbol=symbol,
+            period_tag=period_tag,
+            feature_spec=feature_spec,
+        )
+
     trade_df = trades_to_df(broker.trade_history)
-    regime_report(
-        trade_df,
-        market_data,
-        out_dir="results/metrics/regime",
-        symbol=symbol,
-        period_tag=period_tag,
-    )
+    if not trade_df.empty:
+        regime_report(
+            trades_or_df=trade_df,
+            market_data=market_data,
+            out_dir=str(regime_dir),
+            symbol=symbol,
+            period_tag=period_tag,
+        )
 
     logger.info(
         green
@@ -271,7 +296,8 @@ if __name__ == "__main__":
         (
             "2014-11-01",
             "2024-11-01",
-        ),  # contains bull / bear and consolidation periodes.
+        ),  # contains bull / bear and consolidation periodes. (long run)
+        ("2025-01-01", "2025-08-29"),  # current
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

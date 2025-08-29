@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 from pathlib import Path
 from typing import List
-from . import Trade, PIP_SIZE
+from . import Trade
 
 
 def log(events_log: List[dict], **kwargs):

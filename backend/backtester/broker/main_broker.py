@@ -7,7 +7,7 @@ from .open_trade import open_trade as _open
 from .close_orders import close_trade as _close
 from .margin_calls import (
     can_open_order,
-    needs_warning,  # Keep for msg if close-based warnings are used
+    needs_warning,  # Keep for msg if close-based warnings are used  # noqa: F401
     pick_worst_trade,
     margin_level_pct,
     margin_level_pct_worst_bar,
@@ -147,10 +147,12 @@ class Broker:
 
         # build fallback sizes
         if fallbacks is not None:
-            candidates = [wanted_lots] + [l for l in fallbacks if l != wanted_lots]
+            candidates = [wanted_lots] + [
+                l for l in fallbacks if l != wanted_lots  # noqa: E741
+            ]  # noqa: E741
         elif self.cfg.FALLBACK_LOTS:
             candidates = [wanted_lots] + [
-                l for l in self.cfg.FALLBACK_LOTS if l != wanted_lots
+                l for l in self.cfg.FALLBACK_LOTS if l != wanted_lots  # noqa: E741
             ]
         else:
             # fractions of wanted size

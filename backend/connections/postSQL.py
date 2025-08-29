@@ -2,7 +2,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from config.configure import CONNECTION_STRING
 from utils.helpers import setup_logger
-from utils.helpers import red, green, reset
+from utils.helpers import red, reset
 
 logger = setup_logger(__name__)
 
