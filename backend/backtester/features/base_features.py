@@ -80,60 +80,6 @@ def _bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
     )
 
 
-def _ichimoku(
-    df: pd.DataFrame,
-    tenkan: int = 9,
-    kijun: int = 26,
-    senkou_b: int = 52,
-    shift: int = 26,
-    forward_shift: bool = False,
-) -> pd.DataFrame:
-    """
-    Ichimoku lines with safe alignment for backtests by default.
-    - If forward_shift=False (default):
-        * Tenkan/Kijun are standard.
-        * Senkou A/B are NOT shifted forward. No look-ahead. Values at t use only data ≤ t.
-        * Chikou is close shifted BACK by `shift` (lagging): close.shift(shift).
-    - If forward_shift=True (plotting mode):
-        * Senkou A/B shifted forward by `shift`.
-        * Chikou shifted forward (close.shift(-shift)) for classic visual.
-    """
-    high = df["high"]
-    low = df["low"]
-
-    hh_tenkan = high.rolling(window=tenkan, min_periods=tenkan).max()
-    ll_tenkan = low.rolling(window=tenkan, min_periods=tenkan).min()
-    tenkan_sen = (hh_tenkan + ll_tenkan) / 2
-
-    hh_kijun = high.rolling(window=kijun, min_periods=kijun).max()
-    ll_kijun = low.rolling(window=kijun, min_periods=kijun).min()
-    kijun_sen = (hh_kijun + ll_kijun) / 2
-
-    if forward_shift:
-        senkou_a = ((tenkan_sen + kijun_sen) / 2).shift(shift)
-        hh_b = high.rolling(window=senkou_b, min_periods=senkou_b).max()
-        ll_b = low.rolling(window=senkou_b, min_periods=senkou_b).min()
-        senkou_b_line = ((hh_b + ll_b) / 2).shift(shift)
-        chikou_span = df["close"].shift(-shift)  # visual only
-    else:
-        # backtest-safe: no forward shift; use concurrent values only
-        senkou_a = (tenkan_sen + kijun_sen) / 2
-        hh_b = high.rolling(window=senkou_b, min_periods=senkou_b).max()
-        ll_b = low.rolling(window=senkou_b, min_periods=senkou_b).min()
-        senkou_b_line = (hh_b + ll_b) / 2
-        chikou_span = df["close"].shift(shift)  # lagging, no look-ahead
-
-    return pd.DataFrame(
-        {
-            "ichimoku_tenkan": tenkan_sen,
-            "ichimoku_kijun": kijun_sen,
-            "ichimoku_senkou_a": senkou_a,
-            "ichimoku_senkou_b": senkou_b_line,
-            "ichimoku_chikou": chikou_span,
-        }
-    )
-
-
 # --------- public API ---------
 
 
@@ -182,34 +128,10 @@ def apply_basic_features(
             df["tick_volume"].rolling(int(n), min_periods=int(n)).mean()
         )
 
-    # MACD
-    macd_cfg = cfg.get("macd", {"fast": 12, "slow": 26, "signal": 9})
-    macd_df = _macd(
-        close,
-        int(macd_cfg.get("fast", 12)),
-        int(macd_cfg.get("slow", 26)),
-        int(macd_cfg.get("signal", 9)),
-    )
-    df = df.join(macd_df)
-
     # Bollinger
     bb_cfg = cfg.get("bb", {"n": 20, "k": 2.0})
     bb_df = _bollinger(close, int(bb_cfg.get("n", 20)), float(bb_cfg.get("k", 2.0)))
     df = df.join(bb_df)
-
-    # Ichimoku
-    ich_cfg = cfg.get(
-        "ichimoku", {"tenkan": 9, "kijun": 26, "senkou_b": 52, "shift": 26}
-    )
-    if ich_cfg:
-        ichi_df = _ichimoku(
-            df,
-            int(ich_cfg.get("tenkan", 9)),
-            int(ich_cfg.get("kijun", 26)),
-            int(ich_cfg.get("senkou_b", 52)),
-            int(ich_cfg.get("shift", 26)),
-        )
-        df = df.join(ichi_df)
 
     return df
 

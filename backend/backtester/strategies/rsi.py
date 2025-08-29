@@ -1,7 +1,8 @@
 # strategies/rsi_oscillator.py
 from __future__ import annotations
 from typing import Any, Dict, Optional
-import math, pandas as pd
+import math
+import pandas as pd
 from backtester.strategies.base_strat import BaseStrategy
 from backtester.account_management.types import SizeRequest
 from backtester.broker import PIP_SIZE, Trade

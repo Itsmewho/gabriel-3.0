@@ -30,15 +30,14 @@ from backtester.account_management.govorner import RiskGovernor
 # Strategies to test:
 from backtester.strategies.rsi import RSIOscillator  # noqa: F401
 from backtester.strategies.sma import SmaCrossoverSimple  # noqa: F401
-from backtester.strategies.ema import EmaCrossover
+from backtester.strategies.ema import EmaTripleConfirm
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
 
 # Evals
-from backend.backtester.performance.plots_generator import generate_plots
-from backend.backtester.performance.md_reports import generate_markdown_report
-from backtester.performance.trade_plots import plot_trades
+from backtester.performance.plots_generator import generate_plots
+from backtester.performance.md_reports import generate_markdown_report
 from backtester.performance.trade_svg import export_trades_csv
 from backtester.performance.regime_eval import regime_report, trades_to_df
 
@@ -143,7 +142,6 @@ def run_period(
     if seed is not None:
         np.random.seed(seed)
 
-    # --- This part is the same ---
     period_tag = f"{start_date}_{end_date}"
     market_data = prepare_data(symbol, timeframe, start_date, end_date)
     if market_data.empty:
@@ -153,7 +151,7 @@ def run_period(
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
     cfg_map = {
-        "EMA_X": StrategyConfig(
+        "EMA_Triple": StrategyConfig(
             risk_mode=RiskMode.FIXED,
             risk_pct=0.1,
             lot_min=cfg.VOLUME_MIN,
@@ -166,57 +164,105 @@ def run_period(
     }
     governor = RiskGovernor(cfg_map)
     strategies = [
-        EmaCrossover(
-            symbol=SYMBOL,
+        EmaTripleConfirm(
+            symbol=symbol,
             config={
-                "name": "EMA_X",
-                "FAST_EMA": 12,
-                "SLOW_EMA": 26,
-                "SL_PIPS": 10,
-                "TP_PIPS": 40,
-                "USE_BREAK_EVEN_STOP": False,
+                "name": "EMA_Triple",
+                "FAST_EMA": 14,
+                "MID_EMA": 30,
+                "SLOW_EMA": 50,
+                "TREND_EMA": 150,
+                "SL_PIPS": 5,
+                "TP_PIPS": 20,
                 "USE_TRAILING_STOP": False,
+                "USE_BREAK_EVEN_STOP": False,
                 "USE_TP_EXTENSION": False,
+                "TRAILING_STOP_DISTANCE_PIPS": 10,
+                "BE_TRIGGER_EXTRA_PIPS": 1,
+                "BE_OFFSET_PIPS": 2,
+                "MIN_EMA_SPREAD_PIPS": 0.2,
+                "REQUIRE_SLOPE": True,
+                "MIN_SLOPE": 0.00002,
+                "COOLDOWN_BARS": 2,
+                "CONFIRM_BARS": 2,
             },
-            strat_cfg=cfg_map["EMA_X"],
+            strat_cfg=cfg_map["EMA_Triple"],
             governor=governor,
         )
     ]
 
+    feature_spec = {"ema": [14, 30, 50, 150]}
+
     if not strategies:
         logger.error("No strategies defined for this run. Skipping.")
         return
-    strategy_folder_name = strategies[0].name
 
+    # --- Setup: Dynamic Directory Creation ---
+    strategy_folder_name = strategies[0].name
     base_out_dir = Path(f"results/{strategy_folder_name}")
     audit_dir = base_out_dir / "audit"
     evals_dir = base_out_dir / "evals"
     metrics_dir = base_out_dir / "metrics"
     regime_dir = metrics_dir / "regime"
 
+    # Ensure all output directories are created
     audit_dir.mkdir(parents=True, exist_ok=True)
     evals_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    regime_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- The backtest loop is the same ---
+    # --- Backtest loop ---
     alloc = cfg.INITIAL_BALANCE
-    allocations = {"EMA_FXD": alloc * 1}
+    allocations = {"EMA_Trip": alloc * 1}
     ledger = Ledger(initial_allocations=allocations)
     trade_to_strategy: dict[int, str] = {}
-    feature_spec = {"ema": [14, 26], "sma": [150]}
 
     for ts, row in market_data.iterrows():
         for strat in strategies:
             tr = strat.on_bar(broker, ts, row)
             if tr:
                 trade_to_strategy[tr.id] = strat.name
-                ledger.on_open(strat.name, ts, trade_id=tr.id)  # type: ignore
-        broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)  # type: ignore
+                ledger.on_open(strat.name, ts, trade_id=tr.id)
+        broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)
 
     for tr in broker.trade_history:
         sid = trade_to_strategy.get(tr.id, "UNKNOWN")
-        ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)  # type: ignore
+        ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)
 
+    # --- Reports Section ---
+    trade_df = trades_to_df(broker.trade_history)
+
+    # Generate Regime Report
+    if not trade_df.empty:
+        regime_report(
+            trades_or_df=trade_df,
+            market_data=market_data,
+            out_dir=str(regime_dir),
+            symbol=symbol,
+            period_tag=period_tag,
+        )
+
+    # Generate main Markdown Report
+    generate_markdown_report(
+        trades=broker.trade_history,
+        initial_balance=cfg.INITIAL_BALANCE,
+        out_dir=str(metrics_dir),
+        symbol=symbol,
+        period_tag=period_tag,
+    )
+
+    # Generate ALL Plots
+    if market_data is not None:
+        generate_plots(
+            trades=broker.trade_history,
+            market_data=market_data,
+            out_dir=str(metrics_dir),
+            symbol=symbol,
+            period_tag=period_tag,
+            feature_spec=feature_spec,
+        )
+
+    # Generate Audit and CSV files
     export_account_audit(
         ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
     )
@@ -229,39 +275,6 @@ def run_period(
     export_trades_csv(
         broker.trade_history, str(evals_dir / f"{symbol}_trade_report_{period_tag}.csv")
     )
-    plot_trades(
-        market_data,
-        broker.trade_history,
-        str(evals_dir) / f"results/tradeplots/{symbol}_trade_plot_{period_tag}.png",
-    )
-
-    generate_markdown_report(
-        trades=broker.trade_history,
-        initial_balance=cfg.INITIAL_BALANCE,
-        out_dir=str(metrics_dir),
-        symbol=symbol,
-        period_tag=period_tag,
-    )
-
-    if market_data is not None:
-        generate_plots(
-            trades=broker.trade_history,
-            market_data=market_data,
-            out_dir=str(metrics_dir),
-            symbol=symbol,
-            period_tag=period_tag,
-            feature_spec=feature_spec,
-        )
-
-    trade_df = trades_to_df(broker.trade_history)
-    if not trade_df.empty:
-        regime_report(
-            trades_or_df=trade_df,
-            market_data=market_data,
-            out_dir=str(regime_dir),
-            symbol=symbol,
-            period_tag=period_tag,
-        )
 
     logger.info(
         green
@@ -277,7 +290,6 @@ def run_periods(
     symbol: str, timeframe: str, periods: Iterable[Tuple[str, str]], base_seed: int = 42
 ) -> None:
     for i, (start_date, end_date) in enumerate(periods):
-
         seed = None if base_seed is None else base_seed + i
         run_period(symbol, timeframe, start_date, end_date, seed=seed)
 
@@ -285,19 +297,13 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        (
-            "2009-10-01",
-            "2010-10-01",
-        ),  # Bank collapse (End periode.  Starts with bull ends with bear)
-        ("2014-01-01", "2015-01-01"),  # Brexit  (bear market)
-        ("2017-04-01", "2018-04-01"),  # bull market
-        ("2021-05-01", "2022-10-15"),  # bear (covid bullshit)
-        ("2023-02-01", "2024-09-02"),  # consolidation periode ( after covid )
-        (
-            "2014-11-01",
-            "2024-11-01",
-        ),  # contains bull / bear and consolidation periodes. (long run)
-        ("2025-01-01", "2025-08-29"),  # current
+        ("2009-10-01", "2010-10-01"),  # Bank collapse
+        ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
+        ("2017-04-01", "2018-04-01"),  # Bull market
+        ("2021-05-01", "2022-10-15"),  # Bear (covid)
+        ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
+        ("2014-11-01", "2024-11-01"),  # Long run (mixed)
+        ("2025-01-01", "2025-08-29"),  # Current
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

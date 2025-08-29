@@ -39,7 +39,7 @@ def plot_trades(
     trades_or_events: Iterable[Any],
     filename: str = "results/tradeplots/trade_plot.png",
     columns: Mapping[str, str] | None = None,
-    markersize: int = 30,
+    markersize: int = 20,
     warn_cap: int | None = None,
     fig_dpi: int = 450,
 ):
