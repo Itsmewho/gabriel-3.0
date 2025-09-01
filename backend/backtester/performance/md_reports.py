@@ -9,9 +9,42 @@ import numpy as np
 
 from backtester.broker import Trade
 
+
 # -----------------------------
 # Core DataFrame Builders (self-contained in this file)
 # -----------------------------
+
+
+DEFAULT_METRICS = {
+    "initial_deposit": 0.0,
+    "total_net_profit": 0.0,
+    "gross_profit": 0.0,
+    "gross_loss": 0.0,
+    "profit_factor": np.inf,
+    "expected_payoff": 0.0,
+    "recovery_factor": np.inf,
+    "sharpe_ratio": np.nan,
+    "total_trades": 0,
+    "profit_trades": 0,
+    "loss_trades": 0,
+    "winrate": 0.0,
+    "balance_drawdown_abs_max": 0.0,
+    "balance_drawdown_pct_max": 0.0,
+    "equity_drawdown_abs_from_initial": 0.0,
+    "equity_drawdown_rel_max": 0.0,
+    "largest_profit_trade": 0.0,
+    "average_profit_trade": 0.0,
+    "largest_loss_trade": 0.0,
+    "average_loss_trade": 0.0,
+    "max_consecutive_wins_count": 0,
+    "max_consecutive_wins_sum": 0.0,
+    "max_consecutive_losses_count": 0,
+    "max_consecutive_losses_sum": 0.0,
+    "long_trades_count": 0,
+    "long_trades_win_pct": 0.0,
+    "short_trades_count": 0,
+    "short_trades_win_pct": 0.0,
+}
 
 
 def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
@@ -110,15 +143,24 @@ def equity_curve(df_trades: pd.DataFrame, initial_balance: float) -> pd.DataFram
 
 
 def mt5_like_metrics(df_trades: pd.DataFrame, initial_balance: float) -> Dict[str, Any]:
-    """Calculates a comprehensive set of performance metrics."""
+    if df_trades is None or df_trades.empty:
+        d = DEFAULT_METRICS.copy()
+        d["initial_deposit"] = float(initial_balance)
+        return d
+
     n = len(df_trades)
-    total_net = float(df_trades["pnl"].sum()) if n else 0.0
-    gross_profit = float(df_trades["gross_profit_component"].sum())
-    gross_loss = float(df_trades["gross_loss_component"].sum())
+    pnl = pd.to_numeric(
+        df_trades.get("pnl", pd.Series(dtype=float)), errors="coerce"
+    ).fillna(0.0)
+
+    total_net = float(pnl.sum())
+    gross_profit = float(pnl.clip(lower=0).sum())
+    gross_loss = float((-pnl.clip(upper=0)).sum())
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
     expected_payoff = (total_net / n) if n else 0.0
-    wins = int((df_trades["pnl"] > 0).sum())
-    losses = int((df_trades["pnl"] < 0).sum())
+
+    wins = int((pnl > 0).sum())
+    losses = int((pnl < 0).sum())
     winrate = (wins / n) if n else 0.0
     rets = df_trades["ret"].dropna()
     sharpe = np.nan
@@ -264,7 +306,7 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Equity Drawdown Absolute ($)", ov.get("equity_drawdown_abs_from_initial")),
         ("Total Trades", ov.get("total_trades")),
         (
-            f"Profit Trades (% of total)",
+            "Profit Trades (% of total)",
             f"{fmt(ov.get('profit_trades'))} ({fmt(ov.get('winrate'), is_pct=True)})",
         ),
         ("Largest profit trade", ov.get("largest_profit_trade")),
@@ -278,19 +320,19 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Expected Payoff", ov.get("expected_payoff")),
         ("Sharpe Ratio", ov.get("sharpe_ratio")),
         (
-            f"Balance Drawdown Maximal (%)",
+            "Balance Drawdown Maximal (%)",
             f"{fmt(ov.get('balance_drawdown_pct_max'), is_pct=True)}",
         ),
         (
-            f"Equity Drawdown Relative (%)",
+            "Equity Drawdown Relative (%)",
             f"{fmt(ov.get('equity_drawdown_rel_max'), is_pct=True)}",
         ),
         (
-            f"Short Trades (won %)",
+            "Short Trades (won %)",
             f"{fmt(ov.get('short_trades_count'))} ({fmt(ov.get('short_trades_win_pct'), is_pct=True)})",
         ),
         (
-            f"Long Trades (won %)",
+            "Long Trades (won %)",
             f"{fmt(ov.get('long_trades_count'))} ({fmt(ov.get('long_trades_win_pct'), is_pct=True)})",
         ),
         ("Largest loss trade", ov.get("largest_loss_trade")),

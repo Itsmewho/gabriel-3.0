@@ -4,11 +4,14 @@ from typing import Iterable, Dict, Any, Mapping
 import pandas as pd
 import numpy as np
 import mplfinance as mpf
-from concurrent.futures import ProcessPoolExecutor
 import matplotlib.pyplot as plt
+import random
+
 
 from backtester.broker import Trade
 from backtester.features.better_volume_indicator import add_better_volume
+
+DARK_BLUE = "#0d47a1"
 
 
 def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
@@ -158,19 +161,19 @@ def _plot_trades_on_chart(
     if np.isfinite(buy.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                buy, type="scatter", marker="^", color="lightcyan", markersize=30
+                buy, type="scatter", marker="^", color="limegreen", markersize=20
             )
         )
     if np.isfinite(sell.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                sell, type="scatter", marker="v", color="crimson", markersize=30
+                sell, type="scatter", marker="v", color="crimson", markersize=20
             )
         )
     if np.isfinite(exitp.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
-                exitp, type="scatter", marker="x", color="deepskyblue", markersize=30
+                exitp, type="scatter", marker="x", color="deepskyblue", markersize=20
             )
         )
 
@@ -204,9 +207,36 @@ def _plot_trades_on_chart(
                             df[col],
                             color=colors[ma_type][idx % len(colors[ma_type])],
                             label=f"{ma_type.upper()} {period}",
-                            width=0.5,
+                            width=0.3,
                         )
                     )
+
+    if "sma_high" in feature_spec:
+        for period in feature_spec["sma_high"]:
+            col = f"sma_high_{int(period)}"
+            if col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[col],
+                        color=DARK_BLUE,
+                        width=0.3,
+                        label=f"SMA High {int(period)}",
+                    )
+                )
+
+    if "sma_low" in feature_spec:
+        for period in feature_spec["sma_low"]:
+            col = f"sma_low_{int(period)}"
+            if col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[col],
+                        color=DARK_BLUE,
+                        width=0.3,
+                        label=f"SMA Low {int(period)}",
+                    )
+                )
+
     if "bb" in feature_spec:
         n = feature_spec["bb"].get("n", 20)
         bb_upper, bb_lower = f"bb_{n}_upper", f"bb_{n}_lower"
@@ -297,105 +327,102 @@ def _plot_trades_on_chart(
         if use_better_volume and volume_panel > 0 and volume_panel < len(axes):
             axes[volume_panel].set_title("Better Volume", color="white", size=10)
 
-    fig.savefig(filename, dpi=450, bbox_inches="tight")
+    fig.savefig(filename, dpi=600, bbox_inches="tight")
     plt.close(fig)
     print(f"Plot saved to {filename}")
 
 
-def _plot_best_worst_avg_periods(
+def _plot_selected_periods(
     df_trades: pd.DataFrame,
     market_data: pd.DataFrame,
     out_dir: str,
-    period_type: str,
     symbol: str,
     period_tag: str,
     feature_spec: Dict[str, Any] | None = None,
 ):
+    """Plots fixed/random days/weeks and their 6/12-hour close-ups."""
     md = market_data.copy()
-    if md.index.tz is not None:  # type: ignore
-        md.index = md.index.tz_localize(None)  # type: ignore
-    period_char = "D" if period_type == "day" else "W"
-    all_periods = md.index.to_period(period_char).unique()  # type: ignore
-    if not df_trades.empty:
-        df_trades["period"] = pd.to_datetime(df_trades["entry_time"]).dt.to_period(
-            period_char
-        )
-        period_pnl = df_trades.groupby("period")["pnl"].sum()
-    else:
-        period_pnl = pd.Series(dtype=float)
-    all_period_pnl = period_pnl.reindex(all_periods, fill_value=0).sort_values()
-    if len(all_period_pnl) < 3:
-        print(f"Not enough data for best/worst/avg {period_type} plots.")
-        return
-    periods_to_plot = {
-        "best": all_period_pnl.index[-1],
-        "worst": all_period_pnl.index[0],
-        "average": (all_period_pnl - all_period_pnl.median()).abs().idxmin(),
-    }
+    if md.index.tz is not None:
+        md.index = md.index.tz_localize(None)
+
+    all_days = sorted(md.index.to_period("D").unique())
+    all_weeks = sorted(md.index.to_period("W").unique())
+
+    periods_to_plot = {}
+
+    # --- UPDATED SELECTION LOGIC ---
+    # 1. Select all periods to plot
+    # --- Select Fixed Days ---
+    if len(all_days) > 2:
+        periods_to_plot["3rd_day"] = all_days[2]
+    if len(all_days) > 3:
+        periods_to_plot["4th_day"] = all_days[3]
+    if len(all_days) > 7:
+        periods_to_plot["8th_day"] = all_days[7]
+    if len(all_days) > 8:  # Middle and End only make sense with some data
+        periods_to_plot["middle_day"] = all_days[len(all_days) // 2]
+        periods_to_plot["end_day"] = all_days[-3]
+
+    # --- Select Fixed Weeks ---
+    if len(all_weeks) > 2:
+        periods_to_plot["3rd_week"] = all_weeks[2]
+    if len(all_weeks) > 3:
+        periods_to_plot["4th_week"] = all_weeks[3]
+    if len(all_weeks) > 7:
+        periods_to_plot["8th_week"] = all_weeks[7]
+    if len(all_weeks) > 8:
+        periods_to_plot["middle_week"] = all_weeks[len(all_weeks) // 2]
+        periods_to_plot["end_week"] = all_weeks[-3]
+
+    # --- Select Random Periods ---
+    if len(all_days) >= 2:
+        for i, p in enumerate(random.sample(all_days, min(2, len(all_days))), 1):
+            periods_to_plot[f"random_day_{i}"] = p
+    if len(all_weeks) >= 2:
+        for i, p in enumerate(random.sample(all_weeks, min(2, len(all_weeks))), 1):
+            periods_to_plot[f"random_week_{i}"] = p
+    # --- END OF UPDATED SELECTION ---
+
+    # 2. Generate plots for each selected period and its close-ups
     for p_name, p_val in periods_to_plot.items():
-        if "period" not in df_trades.columns and not df_trades.empty:
-            df_trades["period"] = pd.to_datetime(df_trades["entry_time"]).dt.to_period(
-                period_char
-            )
-        trades_in_period = (
-            df_trades[df_trades["period"] == p_val]
-            if not df_trades.empty
-            else df_trades
-        )
-        market_data_period = md[p_val.start_time : p_val.end_time]
+        period_char = "W" if "week" in p_name else "D"
+        market_data_period = md.loc[p_val.start_time : p_val.end_time]
         if market_data_period.empty:
             continue
-        filename = Path(out_dir) / f"{symbol}_{period_tag}_{p_name}_{period_type}.png"
+
+        trades_in_period = pd.DataFrame()
+        if not df_trades.empty:
+            trades_in_period = df_trades[
+                pd.to_datetime(df_trades["entry_time"]).dt.to_period(period_char)
+                == p_val
+            ]
+
+        filename = Path(out_dir) / f"{symbol}_{period_tag}_{p_name}.png"
         _plot_trades_on_chart(
             market_data_period, trades_in_period, str(filename), feature_spec
         )
 
+        anchor_time = market_data_period.index[0]
+        base_filename = str(filename).removesuffix(".png")
 
-def _plot_fixed_periods(
-    df_trades: pd.DataFrame,
-    market_data: pd.DataFrame,
-    out_dir: str,
-    symbol: str,
-    period_tag: str,
-    feature_spec: Dict[str, Any] | None = None,
-):
-    md = market_data.copy()
-    if md.index.tz is not None:  # type: ignore
-        md.index = md.index.tz_localize(None)  # type: ignore
-    unique_weeks = sorted(md.index.to_period("W").unique())  # type: ignore
-    if len(unique_weeks) < 4:
-        print("Less than 4 weeks of data, skipping fixed period plots.")
-        return
-    fourth_week_period = unique_weeks[3]
-    market_data_4th_week = md[
-        fourth_week_period.start_time : fourth_week_period.end_time
-    ]
-    trades_in_4th_week = pd.DataFrame()
-    if not df_trades.empty:
-        trades_in_4th_week = df_trades[
-            pd.to_datetime(df_trades["entry_time"]).dt.to_period("W")
-            == fourth_week_period
-        ]
-    if not market_data_4th_week.empty:
-        filename_week = Path(out_dir) / f"{symbol}_{period_tag}_fixed_4th_week.png"
-        _plot_trades_on_chart(
-            market_data_4th_week, trades_in_4th_week, str(filename_week), feature_spec
-        )
-    market_data_tuesday = market_data_4th_week[market_data_4th_week.index.weekday == 1]  # type: ignore
-    if not market_data_tuesday.empty:
-        tuesday_period = market_data_tuesday.index[0].to_period("D")
-        trades_on_tuesday = pd.DataFrame()
-        if not df_trades.empty:
-            trades_on_tuesday = df_trades[
-                pd.to_datetime(df_trades["entry_time"]).dt.to_period("D")
-                == tuesday_period
-            ]
-        filename_tuesday = (
-            Path(out_dir) / f"{symbol}_{period_tag}_fixed_4th_week_tuesday.png"
-        )
-        _plot_trades_on_chart(
-            market_data_tuesday, trades_on_tuesday, str(filename_tuesday), feature_spec
-        )
+        for hours in [6, 12]:
+            start_time = anchor_time
+            end_time = anchor_time + pd.Timedelta(hours=hours)
+            market_data_slice = market_data_period.loc[start_time:end_time]
+            if market_data_slice.empty:
+                continue
+
+            trades_slice = pd.DataFrame()
+            if not trades_in_period.empty:
+                trades_slice = trades_in_period[
+                    (pd.to_datetime(trades_in_period["entry_time"]) >= start_time)
+                    & (pd.to_datetime(trades_in_period["entry_time"]) < end_time)
+                ]
+
+            intraday_filename = f"{base_filename}_{hours}hr.png"
+            _plot_trades_on_chart(
+                market_data_slice, trades_slice, intraday_filename, feature_spec
+            )
 
 
 def generate_plots(
@@ -406,29 +433,14 @@ def generate_plots(
     period_tag: str | None = None,
     feature_spec: Dict[str, Any] | None = None,
 ):
+    """Generates a comprehensive set of charts for strategy analysis."""
     plot_dir = Path(out_dir) / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{period_tag}" if period_tag else "full_period"
     df = trades_to_df(trades)
 
-    with ProcessPoolExecutor(max_workers=3) as executor:
-        # max_workers is tricky keep in mind the max cores of your CPU
-        # 1 worker defined here will exe 4 worker as per process the plot_generator will take up 3
-        # 4 x 3 = 12 is you have a 12 core 24 cpu you can bump it up till 6 == speed up backtesting results :D
-        futures = []
-        for period_type in ["day", "week"]:
-            future = executor.submit(
-                _plot_best_worst_avg_periods,
-                df,
-                market_data,
-                str(plot_dir),
-                period_type,
-                symbol,
-                tag,
-                feature_spec,
-            )
-            futures.append(future)
-        for future in futures:
-            future.result()
-
-    _plot_fixed_periods(df, market_data, str(plot_dir), symbol, tag, feature_spec)
+    # The ProcessPoolExecutor is no longer needed since we have a single, unified function.
+    # This simplifies the logic and removes the error.
+    print("Generating selected period plots and their intraday close-ups...")
+    _plot_selected_periods(df, market_data, str(plot_dir), symbol, tag, feature_spec)
+    print("All plots have been generated.")

@@ -16,7 +16,6 @@ from backtester.account_management.account_audit import export_account_audit
 from backtester.broker.audit import (
     audit_trades,
     audit_rejections,
-    audit_max_open_trades,  # noqa: F401
 )
 
 # Account management
@@ -28,9 +27,9 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-from backtester.strategies.rsi import RSIOscillator  # noqa: F401
-from backtester.strategies.sma import SmaCrossoverSimple  # noqa: F401
-from backtester.strategies.ema import EmaTripleConfirm
+# from backtester.strategies.sma_two_step import EmaTwoStepSignal
+from backtester.strategies.test_sma import SmaHLFastPackSignalCross
+
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
@@ -72,43 +71,9 @@ def prepare_data(
 
     # Ask for only what this run needs; missing cols are appended to the same parquet later.
     feature_spec = {
-        "sma": [
-            5,
-            8,
-            12,
-            14,
-            18,
-            20,
-            24,
-            30,
-            40,
-            50,
-            130,
-            150,
-            200,
-            300,
-            400,
-        ],
-        "vol_sma": [10, 20, 30, 40, 50],
-        "ema": [
-            5,
-            8,
-            12,
-            14,
-            18,
-            20,
-            24,
-            30,
-            40,
-            50,
-            130,
-            150,
-            200,
-            300,
-            400,
-        ],
-        "rsi": [14],
-        "atr": [14],
+        "ema": [14, 30, 50, 150, 200, 450, 500],
+        "sma_high": [30, 40, 50],
+        "sma_low": [30, 40, 50],
     }
 
     df = ensure_feature_parquet(
@@ -149,51 +114,48 @@ def run_period(
         logger.error(f"No market data for period {period_tag}. Skipping.")
         return
 
+    STRATEGY_NAME = "EMA_TEST"
+    feature_spec = {
+        "ema": [450, 50, 14],
+        "sma_high": [30],
+        "sma_low": [30],
+    }
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
+
     cfg_map = {
-        "EMA_Triple": StrategyConfig(
+        STRATEGY_NAME: StrategyConfig(
             risk_mode=RiskMode.FIXED,
-            risk_pct=0.1,
+            risk_pct=0.05,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.1,
-            max_drawdown_pct=0.3,
-            max_concurrent_trades=2,
-        ),
+            max_risk_pct_per_trade=0.05,
+            max_drawdown_pct=0.30,
+            max_concurrent_trades=10,
+        )
     }
     governor = RiskGovernor(cfg_map)
+
     strategies = [
-        EmaTripleConfirm(
+        SmaHLFastPackSignalCross(
             symbol=symbol,
             config={
-                "name": "EMA_Triple",
-                "FAST_EMA": 14,
-                "MID_EMA": 30,
-                "SLOW_EMA": 50,
-                "TREND_EMA": 150,
-                "SL_PIPS": 5,
-                "TP_PIPS": 20,
-                "USE_TRAILING_STOP": False,
-                "USE_BREAK_EVEN_STOP": False,
-                "USE_TP_EXTENSION": False,
-                "TRAILING_STOP_DISTANCE_PIPS": 10,
-                "BE_TRIGGER_EXTRA_PIPS": 1,
-                "BE_OFFSET_PIPS": 2,
-                "MIN_EMA_SPREAD_PIPS": 0.2,
-                "REQUIRE_SLOPE": True,
-                "MIN_SLOPE": 0.00002,
-                "COOLDOWN_BARS": 2,
-                "CONFIRM_BARS": 2,
+                "name": STRATEGY_NAME,
+                "SMA_HIGH_N": 30,
+                "SMA_LOW_N": 30,
+                "EMA_SIGNAL_N": 450,
+                "CONFIRM_WINDOW_BARS": 30,
+                "SL_PIPS": 10,
+                "TP_PIPS": 50,
+                "COOLDOWN_BARS": 0,
+                "EPS": 0.0,  # set >0 (e.g., 1e-6 to 1e-5) if you want tolerance
+                # "FAST_PACK": ["sma_high_30","sma_low_30","ema_50","ema_14"],  # optional override
             },
-            strat_cfg=cfg_map["EMA_Triple"],
+            strat_cfg=cfg_map[STRATEGY_NAME],
             governor=governor,
-        )
+        ).bind_parent_df(market_data)
     ]
-
-    feature_spec = {"ema": [14, 30, 50, 150]}
-
     if not strategies:
         logger.error("No strategies defined for this run. Skipping.")
         return
@@ -214,7 +176,7 @@ def run_period(
 
     # --- Backtest loop ---
     alloc = cfg.INITIAL_BALANCE
-    allocations = {"EMA_Trip": alloc * 1}
+    allocations = {STRATEGY_NAME: alloc * 1}
     ledger = Ledger(initial_allocations=allocations)
     trade_to_strategy: dict[int, str] = {}
 
@@ -233,6 +195,18 @@ def run_period(
     # --- Reports Section ---
     trade_df = trades_to_df(broker.trade_history)
 
+    export_account_audit(
+        ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
+    )
+    audit_trades(
+        broker.trade_history, str(audit_dir / f"{symbol}_trade_audit_{period_tag}.csv")
+    )
+    audit_rejections(
+        broker.rejections, str(audit_dir / f"{symbol}_rejected_trades_{period_tag}.csv")
+    )
+    export_trades_csv(
+        broker.trade_history, str(evals_dir / f"{symbol}_trade_report_{period_tag}.csv")
+    )
     # Generate Regime Report
     if not trade_df.empty:
         regime_report(
@@ -268,18 +242,6 @@ def run_period(
         market_data,
         broker.trade_history,
         str(metrics_dir / f"{symbol}_trade_plot_{period_tag}.png"),
-    )
-    export_account_audit(
-        ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
-    )
-    audit_trades(
-        broker.trade_history, str(audit_dir / f"{symbol}_trade_audit_{period_tag}.csv")
-    )
-    audit_rejections(
-        broker.rejections, str(audit_dir / f"{symbol}_rejected_trades_{period_tag}.csv")
-    )
-    export_trades_csv(
-        broker.trade_history, str(evals_dir / f"{symbol}_trade_report_{period_tag}.csv")
     )
 
     logger.info(

@@ -30,8 +30,8 @@ from backtester.filters.atr import add_atr, add_atr_volatility_guard
 
 # Strategies
 from backtester.strategies.base_strat import BaseStrategy
-from backtester.strategies.ema import EMACrossoverStrategy
-from backtester.strategies.sma import SMACrossoverStrategy
+from backend.backtester.strategies.ema_tripple import EMACrossoverStrategy
+from backend.tests._Old_strats.sma_test import SMACrossoverStrategy
 from backtester.strategies.macd import MACDStrategy
 from backtester.strategies.ichimoku import IchimokuStrategy
 from backtester.strategies.rsi_occilator import RSIOscillatorStrategy

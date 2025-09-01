@@ -1,22 +1,13 @@
-# Base_features.py
-
+# --- backtester/features/base_features.py (drop-in) ---
 """
-Basic TA feature builders for SMA, EMA, RSI, ATR, MACD, Ichimoku, Bollinger Bands.
-
-Assumes input DataFrame index is time and has columns: ['open','high','low','close','tick_volume'].
-
-Usage:
-    from basic_ta_features import apply_basic_features
-    df = apply_basic_features(df)
-
-All functions are vectorized. No external deps beyond pandas/numpy.
+Basic TA feature builders for SMA, EMA, RSI, ATR, Bollinger Bands.
+Adds SMA on highs and lows: keys `sma_high` and `sma_low`.
+Assumes df columns: ['open','high','low','close','tick_volume'].
 """
-
 from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Iterable, Optional
-
 
 # --------- core helpers ---------
 
@@ -28,49 +19,40 @@ def _require_cols(df: pd.DataFrame, cols: Iterable[str]) -> None:
 
 
 def _sma(s: pd.Series, n: int) -> pd.Series:
+    n = int(n)
     return s.rolling(n, min_periods=n).mean()
 
 
 def _ema(s: pd.Series, n: int) -> pd.Series:
-    return s.ewm(span=n, adjust=False).mean()
+    return s.ewm(span=int(n), adjust=False).mean()
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    # Wilder's smoothing via EWM(alpha=1/period)
+    period = int(period)
     delta = close.diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
     roll_up = up.ewm(alpha=1 / period, adjust=False).mean()
     roll_down = down.ewm(alpha=1 / period, adjust=False).mean()
     rs = roll_up / roll_down.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 
 def _atr(
     high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
 ) -> pd.Series:
+    period = int(period)
     prev_close = close.shift(1)
     tr1 = (high - low).abs()
     tr2 = (high - prev_close).abs()
     tr3 = (low - prev_close).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1 / period, adjust=False).mean()  # Wilder style
-    return atr
-
-
-def _macd(
-    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
-) -> pd.DataFrame:
-    ema_fast = _ema(close, fast)
-    ema_slow = _ema(close, slow)
-    macd = ema_fast - ema_slow
-    sig = macd.ewm(span=signal, adjust=False).mean()
-    hist = macd - sig
-    return pd.DataFrame({"macd": macd, "macd_signal": sig, "macd_hist": hist})
+    return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
 def _bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
+    n = int(n)
+    k = float(k)
     mid = _sma(close, n)
     std = close.rolling(n, min_periods=n).std(ddof=0)
     upper = mid + k * std
@@ -84,43 +66,49 @@ def _bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
 
 
 def apply_basic_features(
-    df: pd.DataFrame,
-    cfg: Optional[Dict[str, Any]] = None,
+    df: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None
 ) -> pd.DataFrame:
     """
     Enrich df with selected TA features.
 
-    cfg schema (all keys optional):
-        {
-          "sma": [20, 50, 200],
-          "ema": [12, 26, 50],
-          "rsi": [14],
-          "atr": [14],
-          "macd": {"fast": 12, "slow": 26, "signal": 9},
-          "bb": {"n": 20, "k": 2.0},
-          "ichimoku": {"tenkan": 9, "kijun": 26, "senkou_b": 52, "shift": 26}
-        }
+    cfg keys (all optional):
+      "sma": [20, 50, 200]                 # close-based SMA
+      "sma_high": [20, 50]                 # high-based SMA
+      "sma_low": [20, 50]                  # low-based SMA
+      "ema": [12, 26, 50]
+      "rsi": [14]
+      "atr": [14]
+      "vol_sma": [10, 20]
+      "bb": {"n": 20, "k": 2.0}
     """
     _require_cols(df, ["open", "high", "low", "close"])
     close = df["close"]
+    high = df["high"]
+    low = df["low"]
 
     cfg = cfg or {}
 
-    # SMA
-    for n in cfg.get("sma", [20, 50, 200]):
-        df[f"sma_{n}"] = _sma(close, int(n))
+    # SMA (close)
+    for n in cfg.get("sma", []):
+        df[f"sma_{int(n)}"] = _sma(close, n)
 
-    # EMA
-    for n in cfg.get("ema", [12, 26, 50]):
-        df[f"ema_{n}"] = _ema(close, int(n))
+    # SMA (high/low)
+    for n in cfg.get("sma_high", []):
+        df[f"sma_high_{int(n)}"] = _sma(high, n)
+    for n in cfg.get("sma_low", []):
+        df[f"sma_low_{int(n)}"] = _sma(low, n)
+
+    # EMA (close)
+    for n in cfg.get("ema", []):
+        df[f"ema_{int(n)}"] = _ema(close, n)
 
     # RSI
-    for n in cfg.get("rsi", [14]):
-        df[f"rsi_{n}"] = _rsi(close, int(n))
+    for n in cfg.get("rsi", []):
+        df[f"rsi_{int(n)}"] = _rsi(close, n)
 
     # ATR
-    for n in cfg.get("atr", [14]):
-        df[f"atr_{n}"] = _atr(df["high"], df["low"], close, int(n))
+    for n in cfg.get("atr", []):
+        df[f"atr_{int(n)}"] = _atr(high, low, close, n)
 
     # Volume SMA
     for n in cfg.get("vol_sma", []):
@@ -129,13 +117,48 @@ def apply_basic_features(
         )
 
     # Bollinger
-    bb_cfg = cfg.get("bb", {"n": 20, "k": 2.0})
-    bb_df = _bollinger(close, int(bb_cfg.get("n", 20)), float(bb_cfg.get("k", 2.0)))
-    df = df.join(bb_df)
+    if "bb" in cfg:
+        bb_df = _bollinger(
+            close,
+            int(cfg.get("bb", {}).get("n", 20)),
+            float(cfg.get("bb", {}).get("k", 2.0)),
+        )
+        df = df.join(bb_df)
 
     return df
 
 
-__all__ = [
-    "apply_basic_features",
-]
+__all__ = ["apply_basic_features"]
+
+
+# --- backtester/features/features_cache.py (patches only) ---
+# Extend _spec_columns and _sub_spec_for_missing to support sma_high/sma_low
+
+# in _spec_columns(spec):
+#   add:
+#     for n in spec.get("sma_high", []): out.add(f"sma_high_{int(n)}")
+#     for n in spec.get("sma_low", []): out.add(f"sma_low_{int(n)}")
+
+# in _sub_spec_for_missing(spec, missing):
+#   add blocks mirroring sma:
+#     want_sma_high = []
+#     for n in spec.get("sma_high", []):
+#         if f"sma_high_{int(n)}" in missing: want_sma_high.append(int(n))
+#     if want_sma_high: sub["sma_high"] = want_sma_high
+#
+#     want_sma_low = []
+#     for n in spec.get("sma_low", []):
+#         if f"sma_low_{int(n)}" in missing: want_sma_low.append(int(n))
+#     if want_sma_low: sub["sma_low"] = want_sma_low
+
+
+# --- Example request specs ---
+# feature_spec = {
+#   "sma": [12,14,20,30,50,150],
+#   "sma_high": [20,50,150],
+#   "sma_low": [20,50,150],
+#   "ema": [14,18,20,24,30,40,50,130,150],
+#   "rsi": [14],
+#   "atr": [14],
+#   "vol_sma": [10,14,20,30,40,50],
+# }

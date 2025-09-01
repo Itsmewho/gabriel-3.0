@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Set, List
 import pandas as pd
 
-# base fetchers/builders (your existing modules)
+# base fetchers/builders
 from backtester.data.loaders import fetch_sql_market_data, fetch_event_features
 from backtester.features.base_features import apply_basic_features
 
@@ -18,6 +18,10 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
     # SMA/EMA/RSI/ATR lists
     for n in spec.get("sma", []):
         out.add(f"sma_{int(n)}")
+    for n in spec.get("sma_high", []):
+        out.add(f"sma_high_{int(n)}")
+    for n in spec.get("sma_low", []):
+        out.add(f"sma_low_{int(n)}")
     for n in spec.get("ema", []):
         out.add(f"ema_{int(n)}")
     for n in spec.get("rsi", []):
@@ -26,24 +30,11 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
         out.add(f"atr_{int(n)}")
     for n in spec.get("vol_sma", []):
         out.add(f"volume_sma_{int(n)}")
-    # MACD
-    if "macd" in spec:
-        out.update(["macd", "macd_signal", "macd_hist"])
     # Bollinger
     if "bb" in spec:
         n = int(spec["bb"].get("n", 20))
         out.update([f"bb_{n}_mid", f"bb_{n}_upper", f"bb_{n}_lower"])
-    # Ichimoku
-    if "ichimoku" in spec:
-        out.update(
-            [
-                "ichimoku_tenkan",
-                "ichimoku_kijun",
-                "ichimoku_senkou_a",
-                "ichimoku_senkou_b",
-                "ichimoku_chikou",
-            ]
-        )
+
     return out
 
 
@@ -65,6 +56,20 @@ def _sub_spec_for_missing(
             want_sma.append(int(n))
     if want_sma:
         sub["sma"] = want_sma
+
+    want_sma_high = []
+    for n in spec.get("sma_high", []):
+        if f"sma_high_{int(n)}" in missing:
+            want_sma_high.append(int(n))
+    if want_sma_high:
+        sub["sma_high"] = want_sma_high
+
+    want_sma_low = []
+    for n in spec.get("sma_low", []):
+        if f"sma_low_{int(n)}" in missing:
+            want_sma_low.append(int(n))
+    if want_sma_low:
+        sub["sma_low"] = want_sma_low
 
     want_ema = []
     for n in spec.get("ema", []):
@@ -94,28 +99,11 @@ def _sub_spec_for_missing(
     if want_vol_sma:
         sub["vol_sma"] = want_vol_sma
 
-    if _need(["macd", "macd_signal", "macd_hist"]) and "macd" in spec:
-        sub["macd"] = spec["macd"]
-
     if "bb" in spec:
         n = int(spec["bb"].get("n", 20))
         cols = {f"bb_{n}_mid", f"bb_{n}_upper", f"bb_{n}_lower"}
         if cols & missing:
             sub["bb"] = spec["bb"]
-
-    if (
-        _need(
-            [
-                "ichimoku_tenkan",
-                "ichimoku_kijun",
-                "ichimoku_senkou_a",
-                "ichimoku_senkou_b",
-                "ichimoku_chikou",
-            ]
-        )
-        and "ichimoku" in spec
-    ):
-        sub["ichimoku"] = spec["ichimoku"]
 
     return sub
 
