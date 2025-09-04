@@ -143,22 +143,20 @@ def equity_curve(df_trades: pd.DataFrame, initial_balance: float) -> pd.DataFram
 
 
 def mt5_like_metrics(df_trades: pd.DataFrame, initial_balance: float) -> Dict[str, Any]:
+    # This function is updated to return long_wins and short_wins
     if df_trades is None or df_trades.empty:
         d = DEFAULT_METRICS.copy()
         d["initial_deposit"] = float(initial_balance)
         return d
-
     n = len(df_trades)
     pnl = pd.to_numeric(
         df_trades.get("pnl", pd.Series(dtype=float)), errors="coerce"
     ).fillna(0.0)
-
     total_net = float(pnl.sum())
     gross_profit = float(pnl.clip(lower=0).sum())
     gross_loss = float((-pnl.clip(upper=0)).sum())
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else np.inf
     expected_payoff = (total_net / n) if n else 0.0
-
     wins = int((pnl > 0).sum())
     losses = int((pnl < 0).sum())
     winrate = (wins / n) if n else 0.0
@@ -250,9 +248,11 @@ def mt5_like_metrics(df_trades: pd.DataFrame, initial_balance: float) -> Dict[st
         "max_consecutive_losses_count": max_consecutive_losses_count,
         "max_consecutive_losses_sum": max_consecutive_losses_sum,
         "long_trades_count": long_trades_count,
-        "long_trades_win_pct": long_trades_win_pct,
+        "long_wins": int(long_wins),
+        "long_trades_win_pct": long_trades_win_pct,  # <-- Added long_wins
         "short_trades_count": short_trades_count,
-        "short_trades_win_pct": short_trades_win_pct,
+        "short_wins": int(short_wins),
+        "short_trades_win_pct": short_trades_win_pct,  # <-- Added short_wins
     }
 
 
@@ -287,6 +287,7 @@ def _df_to_markdown(df: pd.DataFrame | None) -> str:
 
 
 def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
+    # This function is updated to display the new detailed metrics
     def fmt(x, is_pct=False):
         if pd.isna(x) or x is None:
             return "-"
@@ -306,7 +307,7 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Equity Drawdown Absolute ($)", ov.get("equity_drawdown_abs_from_initial")),
         ("Total Trades", ov.get("total_trades")),
         (
-            "Profit Trades (% of total)",
+            "Profit Trades",
             f"{fmt(ov.get('profit_trades'))} ({fmt(ov.get('winrate'), is_pct=True)})",
         ),
         ("Largest profit trade", ov.get("largest_profit_trade")),
@@ -328,12 +329,12 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
             f"{fmt(ov.get('equity_drawdown_rel_max'), is_pct=True)}",
         ),
         (
-            "Short Trades (won %)",
-            f"{fmt(ov.get('short_trades_count'))} ({fmt(ov.get('short_trades_win_pct'), is_pct=True)})",
+            "Long Trades",
+            f"{fmt(ov.get('long_trades_count'))}, Won: {fmt(ov.get('long_wins'))} ({fmt(ov.get('long_trades_win_pct'), is_pct=True)})",
         ),
         (
-            "Long Trades (won %)",
-            f"{fmt(ov.get('long_trades_count'))} ({fmt(ov.get('long_trades_win_pct'), is_pct=True)})",
+            "Short Trades",
+            f"{fmt(ov.get('short_trades_count'))}, Won: {fmt(ov.get('short_wins'))} ({fmt(ov.get('short_trades_win_pct'), is_pct=True)})",
         ),
         ("Largest loss trade", ov.get("largest_loss_trade")),
         ("Average loss trade", ov.get("average_loss_trade")),
@@ -341,8 +342,8 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         ("Consecutive loss ($)", ov.get("max_consecutive_losses_sum")),
     ]
     rows = [
-        "| Metric                         | Value         | Metric                         | Value           |",
-        "|:-------------------------------|--------------:|:-------------------------------|----------------:|",
+        "| Metric                          | Value         | Metric                          | Value           |",
+        "|:--------------------------------|--------------:|:--------------------------------|----------------:|",
     ]
     for i in range(max(len(left), len(right))):
         l_metric, l_val = left[i] if i < len(left) else ("", "")
@@ -350,7 +351,7 @@ def _create_summary_table(metrics_dict: Dict[str, Any]) -> str:
         l_val_str = l_val if isinstance(l_val, str) else fmt(l_val)
         r_val_str = r_val if isinstance(r_val, str) else fmt(r_val)
         rows.append(
-            f"| {l_metric:<30} | {l_val_str:>13} | {r_metric:<30} | {r_val_str:>15} |"
+            f"| {l_metric:<31} | {l_val_str:>13} | {r_metric:<31} | {r_val_str:>15} |"
         )
     return "\n".join(rows)
 

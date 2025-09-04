@@ -152,6 +152,7 @@ class EmaSignalLineMultiCross(BaseStrategy):
                     sl_pips=self.sl_pips,
                     tp_pips=self.tp_pips,
                     t=t,
+                    fallbacks=[0.5, 0.2, 0.1],
                     strategy_id=self.name,
                     magic=self.magic,
                 )
@@ -168,6 +169,7 @@ class EmaSignalLineMultiCross(BaseStrategy):
 
 
 """
+USAGE: 
 STRATEGY_NAME = "EMA_BURST"
 
 

@@ -28,6 +28,7 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
         out.add(f"rsi_{int(n)}")
     for n in spec.get("atr", []):
         out.add(f"atr_{int(n)}")
+    # Volume
     for n in spec.get("vol_sma", []):
         out.add(f"volume_sma_{int(n)}")
     # Bollinger

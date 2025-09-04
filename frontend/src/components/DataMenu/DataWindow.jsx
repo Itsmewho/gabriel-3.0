@@ -5,7 +5,7 @@ import Historic from './Historic';
 import Calander from './Calander';
 import OpenOrder from './OpenOrder';
 import Notifications from './Notifications';
-// import Order from './Order';
+import Order from './Order';
 
 const DataWindow = ({ selectedView }) => {
   const renderView = () => {
@@ -16,8 +16,8 @@ const DataWindow = ({ selectedView }) => {
         return <Historic />;
       case 'calander':
         return <Calander />;
-      // case 'order':
-      //   return <Order />;
+      case 'order':
+        return <Order />;
       case 'openorder':
         return <OpenOrder />;
       case 'notifications':

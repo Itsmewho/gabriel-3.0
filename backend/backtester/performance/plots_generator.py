@@ -9,7 +9,7 @@ import random
 
 
 from backtester.broker import Trade
-from backtester.features.better_volume_indicator import add_better_volume
+from backtester.features.better_volume_indicator import add_better_volume_mql
 
 DARK_BLUE = "#0d47a1"
 
@@ -116,7 +116,7 @@ def _plot_trades_on_chart(
 
     use_better_volume = enable_better_volume and "Volume" in df.columns
     if use_better_volume:
-        df = add_better_volume(df)
+        df = add_better_volume_mql(df)
 
     def _nearest(ts: pd.Timestamp) -> pd.Timestamp:
         pos = df.index.get_indexer([ts], method="nearest")[0]

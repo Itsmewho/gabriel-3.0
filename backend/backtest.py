@@ -28,7 +28,7 @@ from backtester.account_management.govorner import RiskGovernor
 
 # Strategies to test:
 # from backtester.strategies.sma_two_step import EmaTwoStepSignal
-from backtester.strategies.test_sma import SmaHLFastPackSignalCross
+from backtester.strategies.test_sma import MultiStageConfirmationCross
 
 
 # Loaders
@@ -71,9 +71,9 @@ def prepare_data(
 
     # Ask for only what this run needs; missing cols are appended to the same parquet later.
     feature_spec = {
-        "ema": [14, 30, 50, 150, 200, 450, 500],
-        "sma_high": [30, 40, 50],
-        "sma_low": [30, 40, 50],
+        "ema": [14, 30, 50, 100, 200, 300, 400, 400, 600],
+        "sma_high": [60, 65, 67, 70],
+        "sma_low": [60, 65, 67, 70],
     }
 
     df = ensure_feature_parquet(
@@ -116,9 +116,9 @@ def run_period(
 
     STRATEGY_NAME = "EMA_TEST"
     feature_spec = {
-        "ema": [450, 50, 14],
-        "sma_high": [30],
-        "sma_low": [30],
+        "ema": [200, 300, 400, 50, 14, 30],
+        "sma_high": [67],
+        "sma_low": [67],
     }
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
@@ -126,35 +126,52 @@ def run_period(
     cfg_map = {
         STRATEGY_NAME: StrategyConfig(
             risk_mode=RiskMode.FIXED,
-            risk_pct=0.05,
+            risk_pct=0.03,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.05,
+            max_risk_pct_per_trade=0.03,
             max_drawdown_pct=0.30,
-            max_concurrent_trades=10,
+            max_concurrent_trades=100,
         )
     }
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        SmaHLFastPackSignalCross(
+        MultiStageConfirmationCross(
             symbol=symbol,
             config={
                 "name": STRATEGY_NAME,
-                "SMA_HIGH_N": 30,
-                "SMA_LOW_N": 30,
-                "EMA_SIGNAL_N": 450,
-                "CONFIRM_WINDOW_BARS": 30,
-                "SL_PIPS": 10,
+                "FAST_PACK": [
+                    "sma_high_67",
+                    "sma_low_67",
+                    "ema_50",
+                    "ema_30",
+                    "ema_14",
+                ],
+                # --- Define the signal lines for each stage and side ---
+                # Define the signal lines for each stage and side
+                "STAGE1_SIGNAL": {
+                    "buy": "ema_400",
+                    "sell": "ema_200",
+                },
+                "STAGE2_SIGNAL": {
+                    "buy": "ema_300",
+                    "sell": "ema_300",
+                },
+                "STAGE3_SIGNAL": {
+                    "buy": "ema_200",
+                    "sell": "ema_400",
+                },
+                "CONFIRM_WINDOW_BARS": 28,  # Timer for Stage 2
+                "COOLDOWN_BARS": 1,
+                "EPS": 0.0,
+                "SL_PIPS": 30,
                 "TP_PIPS": 50,
-                "COOLDOWN_BARS": 0,
-                "EPS": 0.0,  # set >0 (e.g., 1e-6 to 1e-5) if you want tolerance
-                # "FAST_PACK": ["sma_high_30","sma_low_30","ema_50","ema_14"],  # optional override
             },
             strat_cfg=cfg_map[STRATEGY_NAME],
             governor=governor,
-        ).bind_parent_df(market_data)
+        )
     ]
     if not strategies:
         logger.error("No strategies defined for this run. Skipping.")
@@ -259,7 +276,7 @@ def run_periods(
     timeframe: str,
     periods: Iterable[Tuple[str, str]],
     base_seed: int = 42,
-    max_workers: int = 4,
+    max_workers: int = 8,
 ) -> None:
     """Runs multiple backtest periods in parallel."""
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -290,7 +307,7 @@ if __name__ == "__main__":
         ("2021-05-01", "2022-10-15"),  # Bear (covid)
         ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
         ("2014-11-01", "2024-11-01"),  # Long run (mixed)
-        ("2025-01-01", "2025-08-29"),  # Current
+        ("2025-01-01", "2025-09-04"),  # Current
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"
