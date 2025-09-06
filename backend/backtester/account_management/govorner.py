@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Mapping
 from .types import StrategyConfig, GovCheck
 
 
@@ -14,26 +14,30 @@ class StratState:
 
 
 class RiskGovernor:
-    """
-    Enforces:
-    - max concurrent trades
-    - per-strategy drawdown pause/resume
-    """
-
     def __init__(self, cfgs: Dict[str, StrategyConfig]):
         self.cfgs = cfgs
         self.state: Dict[str, StratState] = {sid: StratState() for sid in cfgs}
 
+    # Seed initial equity/peaks from allocations or ledger
+    def seed_from_allocations(self, alloc: Mapping[str, float]):
+        for sid, eq in alloc.items():
+            st = self.state.setdefault(sid, StratState())
+            st.peak_equity = max(st.peak_equity, float(eq))
+
     def on_equity(self, strategy_id: str, equity: float):
         st = self.state[strategy_id]
-        st.peak_equity = max(st.peak_equity, equity if equity > 0 else 0.0)
+        cfg = self.cfgs[strategy_id]
+        # initialize peak on first observation
+        if st.peak_equity <= 0 and equity > 0:
+            st.peak_equity = float(equity)
+        # update peak
+        st.peak_equity = max(st.peak_equity, float(equity))
         peak = max(st.peak_equity, 1e-9)
-        dd = 1.0 - (equity / peak)
-        if dd >= self.cfgs[strategy_id].max_drawdown_pct:
+        dd = 1.0 - (float(equity) / peak)
+        if dd >= cfg.max_drawdown_pct:
             st.paused = True
-
-        # optional auto-resume if equity recovers above, say, 80% of peak
-        if st.paused and equity >= 0.9 * peak:
+        # hysteresis resume threshold
+        if st.paused and float(equity) >= cfg.max_drawdown_resume_pct * peak:
             st.paused = False
 
     def on_open(self, strategy_id: str):

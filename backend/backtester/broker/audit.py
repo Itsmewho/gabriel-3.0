@@ -11,24 +11,21 @@ def log(events_log: List[dict], **kwargs):
     events_log.append(dict(**kwargs))
 
 
-def _combine_reasons(tr: Trade) -> str | None:
-    reasons = []
-    if getattr(tr, "sl_reason", None):
-        reasons.append(tr.sl_reason)
-    if getattr(tr, "tp_reason", None):
-        reasons.append(tr.tp_reason)
+def _collect_mgmt_reasons(tr: Trade) -> list[str]:
+    out: list[str] = []
     if getattr(tr, "be_applied", False):
-        reasons.append("break_even")
-    if not reasons:
-        return None
-    # deduplicate while preserving order
-    seen = set()
-    out = []
-    for r in reasons:
-        if r and r not in seen:
-            seen.add(r)
-            out.append(r)
-    return "+".join(out)
+        out.append("break_even")
+    if (
+        getattr(tr, "sl_mod_count", 0) > 0
+        and getattr(tr, "sl_reason", None) == "trailing_sl"
+    ):
+        out.append("trailing_sl")
+    if (
+        getattr(tr, "tp_mod_count", 0) > 0
+        and getattr(tr, "tp_reason", None) == "tp_extend"
+    ):
+        out.append("tp_extend")
+    return out
 
 
 def audit_trades(
@@ -43,6 +40,7 @@ def audit_trades(
 
     rows = []
     for tr in trades:
+        mgmt_reasons = _collect_mgmt_reasons(tr)
         rows.append(
             dict(
                 id=tr.id,
@@ -60,18 +58,25 @@ def audit_trades(
                 tp_first=tr.tp_first,
                 tp_last=tr.tp_last,
                 tp_mod_count=tr.tp_mod_count,
+                # summaries
+                mgmt_reasons=",".join(mgmt_reasons) if mgmt_reasons else None,
+                mgmt_reason_count=len(mgmt_reasons),
+                # last-state details
                 sl_reason=getattr(tr, "sl_reason", None),
                 tp_reason=getattr(tr, "tp_reason", None),
-                combined_reasons=_combine_reasons(tr),
+                # BE audit
                 be_applied=getattr(tr, "be_applied", False),
                 be_price=getattr(tr, "be_price", None),
                 be_trigger_pips=getattr(tr, "be_trigger_pips", None),
                 be_offset_pips=getattr(tr, "be_offset_pips", 0.0),
+                # per-trade trailing overrides
                 trailing_sl_distance=getattr(tr, "trailing_sl_distance", None),
                 near_tp_buffer_pips=getattr(tr, "near_tp_buffer_pips", None),
                 tp_extension_pips=getattr(tr, "tp_extension_pips", None),
+                # stats
                 highest_price=tr.highest_price_during_trade,
                 lowest_price=tr.lowest_price_during_trade,
+                # costs & PnL
                 slippage_open_pips=getattr(tr, "slippage_open_pips", 0.0),
                 slippage_close_pips=getattr(tr, "slippage_close_pips", 0.0),
                 commission=tr.commission_paid,

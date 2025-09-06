@@ -29,7 +29,8 @@ class StrategyConfig:
     # risk limits
     max_risk_pct_per_trade: float = 0.03
     max_concurrent_trades: int = 5
-    max_drawdown_pct: float = 0.3  # pause if equity falls 30% from peak
+    max_drawdown_pct: float = 0.3
+    max_drawdown_resume_pct: float = 0.9  # resume when equity >= 90% of peak
 
 
 @dataclass
