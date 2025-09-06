@@ -350,9 +350,6 @@ def _plot_selected_periods(
 
     periods_to_plot = {}
 
-    # --- UPDATED SELECTION LOGIC ---
-    # 1. Select all periods to plot
-    # --- Select Fixed Days ---
     if len(all_days) > 2:
         periods_to_plot["3rd_day"] = all_days[2]
     if len(all_days) > 3:

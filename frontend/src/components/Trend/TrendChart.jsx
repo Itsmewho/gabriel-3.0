@@ -31,6 +31,13 @@ const fmtLocalMinute = (d) => {
   )}:${p2(d.getMinutes())}`;
 };
 
+// Helper: skip Saturday(6) and Sunday(0)
+const isWeekend = (d) => {
+  const day = d.getDay();
+  return day === 0 || day === 6;
+};
+
+// Build a dense, gapless timeline that EXCLUDES weekend minutes
 const buildTimeline = (data, futureMinutes = 60) => {
   if (!data?.length) return [];
   const first = minuteKey(data[0].time);
@@ -39,8 +46,11 @@ const buildTimeline = (data, futureMinutes = 60) => {
   const end = parseLocalMinute(last);
   const endPlus = new Date(end.getTime() + futureMinutes * 60000);
   const out = [];
-  for (let t = start.getTime(); t <= endPlus.getTime(); t += 60000)
-    out.push(fmtLocalMinute(new Date(t)));
+  for (let t = start.getTime(); t <= endPlus.getTime(); t += 60000) {
+    const d = new Date(t);
+    if (isWeekend(d)) continue; // skip weekends to avoid empty slots/gaps
+    out.push(fmtLocalMinute(d));
+  }
   return out;
 };
 
@@ -70,10 +80,9 @@ export const TrendChart = ({
   const low = scale?.low ?? 0;
   const range = Math.max(1e-9, high - low);
 
-  // define minuteKeys first
+  // Timeline that skips weekends
   const minuteKeys = useMemo(() => buildTimeline(dataDedup, 60), [dataDedup]);
 
-  // then define keyToIndex
   const keyToIndex = useMemo(
     () => new Map(minuteKeys.map((k, i) => [k, i])),
     [minuteKeys],
@@ -102,6 +111,7 @@ export const TrendChart = ({
     }
     return grouped;
   }, [economicEvents, minuteKeys]);
+
   // Auto-scroll only when timeline grows
   const prevLenRef = useRef(0);
   useEffect(() => {
@@ -212,7 +222,7 @@ export const TrendChart = ({
         aria-label="Trend chart scroll area"
       >
         <div className={chartStyles.candle_container}>
-          {minuteKeys.map((k, idx) => {
+          {minuteKeys.map((k) => {
             const c = dataByMinute.get(k);
             return c ? (
               <Candle

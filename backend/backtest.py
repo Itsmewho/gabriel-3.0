@@ -54,7 +54,7 @@ logger = setup_logger(__name__)
 
 
 def prepare_data(
-    symbol, timeframe, start_date, end_date, force_reload=False
+    symbol, timeframe, start_date, end_date, force_reload=True
 ) -> pd.DataFrame:
     cache_dir = Path("results/cache")
     cache_dir.mkdir(exist_ok=True, parents=True)
@@ -71,9 +71,9 @@ def prepare_data(
 
     # Ask for only what this run needs; missing cols are appended to the same parquet later.
     feature_spec = {
-        "ema": [14, 30, 50, 100, 200, 300, 400, 400, 600],
-        "sma_high": [60, 65, 67, 70],
-        "sma_low": [60, 65, 67, 70],
+        "ema": [3, 5, 14, 20, 30, 45, 50, 100, 200, 300, 400, 600],
+        "sma_high": [5, 60, 65, 67, 70],
+        "sma_low": [5, 60, 65, 67, 70],
     }
 
     df = ensure_feature_parquet(
@@ -116,9 +116,9 @@ def run_period(
 
     STRATEGY_NAME = "EMA_TEST"
     feature_spec = {
-        "ema": [200, 300, 400, 50, 14, 30],
-        "sma_high": [67],
-        "sma_low": [67],
+        "ema": [3, 5, 14, 20, 45],
+        "sma_high": [5],
+        "sma_low": [5],
     }
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
@@ -141,33 +141,44 @@ def run_period(
         MultiStageConfirmationCross(
             symbol=symbol,
             config={
-                "name": STRATEGY_NAME,
-                "FAST_PACK": [
-                    "sma_high_67",
-                    "sma_low_67",
-                    "ema_50",
-                    "ema_30",
-                    "ema_14",
-                ],
-                # --- Define the signal lines for each stage and side ---
-                # Define the signal lines for each stage and side
-                "STAGE1_SIGNAL": {
-                    "buy": "ema_400",
-                    "sell": "ema_200",
-                },
-                "STAGE2_SIGNAL": {
-                    "buy": "ema_300",
-                    "sell": "ema_300",
-                },
-                "STAGE3_SIGNAL": {
-                    "buy": "ema_200",
-                    "sell": "ema_400",
-                },
-                "CONFIRM_WINDOW_BARS": 28,  # Timer for Stage 2
-                "COOLDOWN_BARS": 1,
-                "EPS": 0.0,
-                "SL_PIPS": 30,
-                "TP_PIPS": 50,
+                # "name": STRATEGY_NAME,
+                # "FAST_PACK": [
+                #     "sma_high_5",
+                #     "sma_low_5",
+                #     "ema_5",
+                #     "ema_14",
+                #     "ema_20",
+                # ],
+                # # Define the signal lines for each stage and side
+                # "STAGE1_SIGNAL": {
+                #     "buy": "ema_45",
+                #     "sell": "ema_14",
+                # },
+                # "STAGE2_SIGNAL": {
+                #     "buy": "ema_20",
+                #     "sell": "ema_20",
+                # },
+                # "STAGE3_SIGNAL": {
+                #     "buy": "ema_14",
+                #     "sell": "ema_45",
+                # },
+                # "CONFIRM_WINDOW_BARS": 15,  # Timer for Stage 2
+                # "COOLDOWN_BARS": 1,
+                # "EPS": 0.0,
+                # # Risk management
+                # "USE_BREAK_EVEN_STOP": False,
+                # "BE_TRIGGER_PIPS": 30,  # when +8 pips in favor…
+                # "BE_OFFSET_PIPS": 20,  # …move SL to +3 pips -> cant move above Triggerpips
+                # # Trail only after momentum proves itself
+                # "USE_TRAILING_STOP": False,
+                # "TRAILING_STOP_DISTANCE_PIPS": 10,  # tighter than 30, not too tight
+                # # Extend TP if price is pushing near it (runner mode)
+                # "USE_TP_EXTENSION": False,
+                # "NEAR_TP_BUFFER_PIPS": 10,  # start stretching when within 15 pips
+                # "TP_EXTENSION_PIPS": 30,  # add 30 pips per extension
+                # # base SL/TP per trade
+                # "SL_PIPS": 2,
+                # "TP_PIPS": 8,
             },
             strat_cfg=cfg_map[STRATEGY_NAME],
             governor=governor,
@@ -301,13 +312,15 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        ("2009-10-01", "2010-10-01"),  # Bank collapse
-        ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
-        ("2017-04-01", "2018-04-01"),  # Bull market
-        ("2021-05-01", "2022-10-15"),  # Bear (covid)
-        ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
-        ("2014-11-01", "2024-11-01"),  # Long run (mixed)
-        ("2025-01-01", "2025-09-04"),  # Current
+        ("2009-10-05", "2009-10-05")  # For Testing broker
+        # ("2009-10-01", "2010-10-01"),  # Bank collapse
+        # ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
+        # ("2017-04-01", "2018-04-01"),  # Bull market
+        # ("2021-05-01", "2022-10-15"),  # Bear (covid)
+        # ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
+        # ("2014-11-01", "2024-11-01"),  # Long run (mixed)
+        # ("2025-01-01", "2025-09-04"),  # Current year
+        # ("2023-09-01", "2025-09-04"),  # last 2 years
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

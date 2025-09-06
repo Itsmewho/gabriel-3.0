@@ -22,10 +22,27 @@ def close_trade(
     # stamp
     trade.exit_price = exit_price
     trade.exit_time = t
-    if reason == "Take Profit" and getattr(trade, "tp_mod_count", 0) > 0:
-        reason = "Take Profit (extended)"
-    trade.exit_reason = reason
 
+    # normalize exit reason
+    r = (reason or "").strip()
+
+    # TP: if any TP extension occurred, label as extended
+    if r in ("TP", "Take Profit"):
+        r = (
+            "Take Profit (extended)"
+            if getattr(trade, "tp_mod_count", 0) > 0
+            else "Take Profit"
+        )
+
+    # SL: if SL was moved to break-even, label accordingly
+    elif r in ("SL", "Stop Loss"):
+        r = (
+            "Break Even (SL)"
+            if getattr(trade, "sl_reason", None) == "break_even"
+            else "Stop Loss"
+        )
+
+    trade.exit_reason = r
     # full net for audit
     full_net = gross - trade.commission_paid - trade.swap_paid
     trade.pnl = full_net

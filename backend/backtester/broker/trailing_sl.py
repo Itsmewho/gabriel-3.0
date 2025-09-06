@@ -59,7 +59,8 @@ def update_trailing_tp(
     tp_extension_pips: float | None = None,
 ):
     """Monotonic TP extension using absolute price action (high/low).
-    Long: TP can only go UP. Short: TP can only go DOWN.
+    Long: TP can only go UP and must remain above current price.
+    Short: TP can only go DOWN and must remain below current price.
     """
     if tr.tp is None:
         return
@@ -71,23 +72,28 @@ def update_trailing_tp(
     if tr.tp_first is None:
         tr.tp_first = old_tp
 
+    new_tp = old_tp  # default: unchanged
+
     if tr.side == "buy":
-        # Extend when price gets near TP (use high for absolute hit proximity)
+        # only consider extension when we're near the current TP
         if (old_tp - high) <= buf:
             proposed = old_tp + ext
             floor = max(old_tp, tr.tp_first)
-            new_tp = max(proposed, floor)
-            if new_tp > old_tp:
-                tr.tp = new_tp
+            cand = max(proposed, floor)
+            # MT5-like guard: TP for buys must remain above market (use bar high as proxy)
+            if cand > high:
+                new_tp = cand
     else:
         if (low - old_tp) <= buf:
             proposed = old_tp - ext
             ceil = min(old_tp, tr.tp_first)
-            new_tp = min(proposed, ceil)
-            if new_tp < old_tp:
-                tr.tp = new_tp
+            cand = min(proposed, ceil)
+            # MT5-like guard: TP for sells must remain below market (use bar low as proxy)
+            if cand < low:
+                new_tp = cand
 
-    if tr.tp != old_tp:
+    if new_tp != old_tp:
+        tr.tp = new_tp
         tr.tp_reason = "tp_extend"
         tr.tp_last = tr.tp
         tr.tp_mod_count += 1

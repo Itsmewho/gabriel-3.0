@@ -2,7 +2,7 @@
 
 import pandas as pd
 from . import Trade, BrokerConfig, PIP_SIZE
-from .cost_engine import apply_spread, commission_open, fill_price_on_open
+from .cost_engine import apply_spread_at, commission_open, fill_price_on_open
 
 
 def calc_sl_tp(
@@ -27,8 +27,8 @@ def open_trade(
     strategy_id=None,
     magic=None,
 ) -> tuple[Trade, float]:
-    entry = fill_price_on_open(cfg, side, raw_price)
-    baseline_no_slip = apply_spread(cfg, side, raw_price)
+    entry = fill_price_on_open(cfg, side, raw_price, t=t)
+    baseline_no_slip = apply_spread_at(cfg, side, raw_price, t=t)
     slip_open_pips = (entry - baseline_no_slip) / PIP_SIZE
     sl, tp = calc_sl_tp(entry, side, sl_pips, tp_pips)
 

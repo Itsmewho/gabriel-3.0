@@ -33,10 +33,9 @@ class MultiStageConfirmationCross(BaseStrategy):
             config.get("FAST_PACK", ["sma_high_30", "sma_low_30", "ema_50", "ema_14"])
         )
 
-        # --- Stage Definitions (fully configurable) ---
+        # --- Stage Definitions  ---
         self.stage1_signal: Dict[str, str] = config.get("STAGE1_SIGNAL")
         self.stage2_signal: Dict[str, str] = config.get("STAGE2_SIGNAL")
-        # --- NEW: Optional Third Stage ---
         self.stage3_signal: Dict[str, str] = config.get("STAGE3_SIGNAL")
 
         self.window_bars = int(config.get("CONFIRM_WINDOW_BARS", 30))

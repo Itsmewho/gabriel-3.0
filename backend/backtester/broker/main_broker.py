@@ -7,15 +7,25 @@ from .open_trade import open_trade as _open
 from .close_orders import close_trade as _close
 from .margin_calls import (
     can_open_order,
-    needs_warning,  # Keep for msg if close-based warnings are used  # noqa: F401
     pick_worst_trade,
     margin_level_pct,
     margin_level_pct_worst_bar,
+    should_force_liquidation,
 )
 from .break_even import update_break_even
-from .trailing_sl import update_trailing_sl
-from .cost_engine import swap_cost, fill_price_on_close, apply_spread
+from .trailing_sl import update_trailing_sl, update_trailing_tp
+from .cost_engine import swap_cost, fill_price_on_close, apply_spread_at
 from .audit import log
+
+
+def liquidation_fill_price(
+    cfg: BrokerConfig, tr: Trade, high: float, low: float, t
+) -> float:
+    return (
+        fill_price_on_close(cfg, "sell", low, t=t)
+        if tr.side == "buy"
+        else fill_price_on_close(cfg, "buy", high, t=t)
+    )
 
 
 class Broker:
@@ -117,6 +127,26 @@ class Broker:
     def close_all(self, price: float, t: pd.Timestamp, reason="End"):
         for tr in list(self.open_trades):
             self.close_trade(tr, price, reason, t)
+
+    def _force_liquidation(self, high: float, low: float, t: pd.Timestamp) -> None:
+        while self.open_trades and should_force_liquidation(
+            self.cfg, self.balance, self.open_trades, high, low
+        ):
+            worst = pick_worst_trade(self.cfg, self.open_trades, high, low)
+            if worst is None:
+                break
+            exec_price = liquidation_fill_price(self.cfg, worst, high, low, t)
+            self.close_trade(worst, exec_price, "Margin Call", t)
+            ml_worst = margin_level_pct_worst_bar(
+                self.cfg, self.balance, self.open_trades, high, low
+            )
+            log(
+                self.events_log,
+                type="margin_call",
+                time=t,
+                ml_worst=ml_worst,
+                trade_id=worst.id,
+            )
 
     def open_trade(
         self,
@@ -228,12 +258,10 @@ class Broker:
         t: pd.Timestamp,
         trail_pips: float | None = None,
     ):
-        # update running stats + trailing SL + handle exits
         for tr in list(self.open_trades):
             tr.highest_price_during_trade = max(tr.highest_price_during_trade, high)
             tr.lowest_price_during_trade = min(tr.lowest_price_during_trade, low)
 
-            # --- Break-even (per-trade or global) ---
             trig = tr.be_trigger_pips or (
                 self.cfg.BREAK_EVEN_TRIGGER_PIPS if self.cfg.BREAK_EVEN_ENABLE else None
             )
@@ -259,38 +287,49 @@ class Broker:
                     time=t,
                 )
 
-                update_trailing_sl(
-                    tr,
-                    high,
-                    low,
-                    trail_pips=tr.trailing_sl_distance or trail_pips,
-                    events_log=self.events_log,
-                    t=t,
-                )
+            update_trailing_sl(
+                tr,
+                high,
+                low,
+                trail_pips=tr.trailing_sl_distance or trail_pips,
+                events_log=self.events_log,
+                t=t,
+            )
+
+            update_trailing_tp(
+                tr,
+                high,
+                low,
+                cfg=self.cfg,
+                events_log=self.events_log,
+                t=t,
+                near_tp_buffer_pips=tr.near_tp_buffer_pips,
+                tp_extension_pips=tr.tp_extension_pips,
+            )
 
             if tr.side == "buy":
                 if tr.sl is not None and low <= tr.sl:
-                    exec_price = fill_price_on_close(self.cfg, "sell", tr.sl)
-                    baseline = apply_spread(self.cfg, "sell", tr.sl)
+                    exec_price = fill_price_on_close(self.cfg, "sell", tr.sl, t=t)
+                    baseline = apply_spread_at(self.cfg, "sell", tr.sl, t=t)
                     tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
                     self.close_trade(tr, exec_price, tr.sl_reason or "Stop Loss", t)
                     continue
                 if tr.tp is not None and high >= tr.tp:
-                    exec_price = fill_price_on_close(self.cfg, "sell", tr.tp)
-                    baseline = apply_spread(self.cfg, "sell", tr.tp)
+                    exec_price = fill_price_on_close(self.cfg, "sell", tr.tp, t=t)
+                    baseline = apply_spread_at(self.cfg, "sell", tr.tp, t=t)
                     tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
                     self.close_trade(tr, exec_price, tr.tp_reason or "Take Profit", t)
                     continue
             else:
                 if tr.sl is not None and high >= tr.sl:
-                    exec_price = fill_price_on_close(self.cfg, "buy", tr.sl)
-                    baseline = apply_spread(self.cfg, "buy", tr.sl)
+                    exec_price = fill_price_on_close(self.cfg, "buy", tr.sl, t=t)
+                    baseline = apply_spread_at(self.cfg, "buy", tr.sl, t=t)
                     tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
                     self.close_trade(tr, exec_price, tr.sl_reason or "Stop Loss", t)
                     continue
                 if tr.tp is not None and low <= tr.tp:
-                    exec_price = fill_price_on_close(self.cfg, "buy", tr.tp)
-                    baseline = apply_spread(self.cfg, "buy", tr.tp)
+                    exec_price = fill_price_on_close(self.cfg, "buy", tr.tp, t=t)
+                    baseline = apply_spread_at(self.cfg, "buy", tr.tp, t=t)
                     tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
                     self.close_trade(tr, exec_price, tr.tp_reason or "Take Profit", t)
                     continue
@@ -302,21 +341,10 @@ class Broker:
             if 0 < ml_worst < 90.0:
                 log(self.events_log, type="margin_warning", time=t, ml_worst=ml_worst)
 
-        while self.open_trades:
-            ml_worst = margin_level_pct_worst_bar(
-                self.cfg, self.balance, self.open_trades, high, low
-            )
-            if ml_worst >= self.cfg.STOP_OUT_LEVEL_PCT:
-                break
-            worst = pick_worst_trade(self.cfg, self.open_trades, close)
-            if worst is None:
-                break
-            self.close_trade(worst, close, "Margin Call", t)
-            log(self.events_log, type="margin_call", time=t, ml_worst=ml_worst)
+        self._force_liquidation(high, low, t)
 
         cur_day = t.date()
         if cur_day != self._last_swap_day:
-
             for tr in self.open_trades:
                 fee = swap_cost(self.cfg, tr, t)
                 if fee:
@@ -332,3 +360,5 @@ class Broker:
                         lots=tr.lot_size,
                     )
             self._last_swap_day = cur_day
+
+        self.maybe_resume_trading(close, t)
