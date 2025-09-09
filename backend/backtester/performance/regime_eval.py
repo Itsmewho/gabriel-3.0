@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, Iterable, Tuple, Optional
+from backtester.features.better_volume_indicator import add_better_volume_mql
 from backtester.broker import Trade
 import numpy as np
 import pandas as pd
@@ -117,17 +118,10 @@ def prepare_regime_indicators(
     market_data: pd.DataFrame,
     trend_fast: int = 50,
     trend_slow: int = 200,
-    trend_eps: float = 0.0,  # flat threshold (in price units)
-    vol_window: int = 60,  # in bars
+    trend_eps: float = 0.0,
+    vol_window: int = 60,
+    bv_lookback: int = 30,  # NEW
 ) -> pd.DataFrame:
-    """
-    Returns a DataFrame aligned to market_data.index with:
-      - sma_fast, sma_slow
-      - trend_score = sma_fast - sma_slow
-      - trend_regime: 'uptrend' | 'flat' | 'downtrend'
-      - vol_sigma: rolling std of log returns
-      - vol_bucket: 'low_vol' | 'mid_vol' | 'high_vol' (terciles)
-    """
     df = _prep_market(market_data)
     close = df["close"].astype(float)
 
@@ -135,22 +129,25 @@ def prepare_regime_indicators(
     sma_slow = close.rolling(trend_slow, min_periods=trend_slow // 2).mean()
     trend_score = sma_fast - sma_slow
 
-    # Trend label
     tr = pd.Series(index=df.index, dtype="object")
     tr[trend_score > trend_eps] = "uptrend"
     tr[trend_score < -trend_eps] = "downtrend"
     tr[(trend_score >= -trend_eps) & (trend_score <= trend_eps)] = "flat"
 
-    # Volatility (std of log-returns)
-    logret = np.log(close).diff()  # type: ignore
+    logret = np.log(close).diff()
     vol_sigma = logret.rolling(vol_window, min_periods=vol_window // 2).std()
-
-    # Vol buckets by global terciles over the period
     q1, q2 = vol_sigma.quantile([1 / 3, 2 / 3])
     vb = pd.Series(index=df.index, dtype="object")
     vb[vol_sigma <= q1] = "low_vol"
     vb[(vol_sigma > q1) & (vol_sigma <= q2)] = "mid_vol"
     vb[vol_sigma > q2] = "high_vol"
+
+    # BetterVolume color
+    try:
+        bv_df = add_better_volume_mql(df, lookback=bv_lookback)
+        bv_color = bv_df["bv_color"].reindex(df.index)
+    except Exception:
+        bv_color = pd.Series(index=df.index, dtype="object")
 
     out = pd.DataFrame(
         {
@@ -160,12 +157,16 @@ def prepare_regime_indicators(
             "trend_regime": tr,
             "vol_sigma": vol_sigma,
             "vol_bucket": vb,
+            "bv_color": bv_color,  # NEW
         },
         index=df.index,
     )
     out["regime_label"] = (
         out["trend_regime"].astype(str) + "+" + out["vol_bucket"].astype(str)
     )
+    out["regime_label_bv"] = (
+        out["trend_regime"].astype(str) + "+" + out["bv_color"].astype(str)
+    )  # NEW
     return out
 
 
@@ -210,9 +211,8 @@ def tag_trades_with_regimes(
     if df["entry_time"].dt.tz is not None:  # type: ignore
         df["entry_time"] = df["entry_time"].dt.tz_localize(None)  # type: ignore
 
-    trend_vals: list[Optional[str]] = []
-    vol_vals: list[Optional[str]] = []
-    lab_vals: list[Optional[str]] = []
+    trend_vals, vol_vals, lab_vals = [], [], []
+    bv_vals, lab_bv_vals = [], []  # NEW
 
     for _, r in df.iterrows():
         et = r.get("entry_time")
@@ -220,19 +220,31 @@ def tag_trades_with_regimes(
             trend_vals.append(None)
             vol_vals.append(None)
             lab_vals.append(None)
+            bv_vals.append(None)
+            lab_bv_vals.append(None)
             continue
-        key = _nearest_index(reg.index, et)  # type: ignore
-        tr = reg.at[key, "trend_regime"]
-        vb = reg.at[key, "vol_bucket"]
-        trend_vals.append(tr if isinstance(tr, str) else None)
-        vol_vals.append(vb if isinstance(vb, str) else None)
+        key = _nearest_index(reg.index, et)
+
+        trv = reg.at[key, "trend_regime"]
+        vvb = reg.at[key, "vol_bucket"]
+        bvc = reg.at[key, "bv_color"] if "bv_color" in reg.columns else None
+
+        trend_vals.append(trv if isinstance(trv, str) else None)
+        vol_vals.append(vvb if isinstance(vvb, str) else None)
         lab_vals.append(
-            f"{tr}+{vb}" if isinstance(tr, str) and isinstance(vb, str) else None
+            f"{trv}+{vvb}" if isinstance(trv, str) and isinstance(vvb, str) else None
+        )
+
+        bv_vals.append(bvc if isinstance(bvc, str) else None)
+        lab_bv_vals.append(
+            f"{trv}+{bvc}" if isinstance(trv, str) and isinstance(bvc, str) else None
         )
 
     df["trend_regime"] = trend_vals
     df["vol_regime"] = vol_vals
     df["regime_label"] = lab_vals
+    df["bv_color"] = bv_vals  # NEW
+    df["regime_label_bv"] = lab_bv_vals  # NEW
     return df
 
 
@@ -240,13 +252,6 @@ def tag_trades_with_regimes(
 # Summaries & correlation
 # -----------------------------
 def summarize_by_regime(df_trades_tagged: pd.DataFrame) -> Dict[str, pd.DataFrame]:
-    """
-    Returns:
-      - trend_summary
-      - vol_summary
-      - combo_summary  (trend x vol)
-      - heatmap_df     (pivot: sum pnl)
-    """
     if df_trades_tagged.empty:
         empty = pd.DataFrame()
         return dict(
@@ -254,19 +259,21 @@ def summarize_by_regime(df_trades_tagged: pd.DataFrame) -> Dict[str, pd.DataFram
             vol_summary=empty,
             combo_summary=empty,
             heatmap_df=empty,
+            bv_summary=empty,
+            trend_bv_summary=empty,
+            bv_heatmap=empty,
         )
 
-    def _agg(g: pd.DataFrame) -> pd.Series:
+    def _agg(g):
         n = len(g)
         wins = (g["pnl"] > 0).sum()
-        wl = wins / n if n else 0.0
         return pd.Series(
             dict(
                 trades=n,
                 pnl_total=g["pnl"].sum(),
                 pnl_avg=g["pnl"].mean(),
                 pnl_med=g["pnl"].median(),
-                winrate=wl,
+                winrate=(wins / n) if n else 0.0,
             )
         )
 
@@ -282,25 +289,44 @@ def summarize_by_regime(df_trades_tagged: pd.DataFrame) -> Dict[str, pd.DataFram
         .reset_index()
     )
 
-    # Heatmap data (sum pnl)
+    # NEW: BetterVolume summaries
+    bv_summary = (
+        df_trades_tagged.groupby("bv_color", dropna=True).apply(_agg).reset_index()
+    )
+    trend_bv_summary = (
+        df_trades_tagged.groupby(["trend_regime", "bv_color"], dropna=True)
+        .apply(_agg)
+        .reset_index()
+    )
+
     heatmap_df = df_trades_tagged.pivot_table(
         index="trend_regime",
         columns="vol_regime",
         values="pnl",
         aggfunc="sum",
         fill_value=0.0,
+    ).reindex(
+        index=["uptrend", "flat", "downtrend"],
+        columns=["low_vol", "mid_vol", "high_vol"],
     )
 
-    # Reindex for consistent ordering
-    idx_order = ["uptrend", "flat", "downtrend"]
-    col_order = ["low_vol", "mid_vol", "high_vol"]
-    heatmap_df = heatmap_df.reindex(index=idx_order, columns=col_order)
+    # NEW: Trend × BetterVolume heatmap
+    bv_heatmap = df_trades_tagged.pivot_table(
+        index="trend_regime",
+        columns="bv_color",
+        values="pnl",
+        aggfunc="sum",
+        fill_value=0.0,
+    ).reindex(index=["uptrend", "flat", "downtrend"])
 
     return dict(
         trend_summary=trend_summary,
         vol_summary=vol_summary,
         combo_summary=combo_summary,
         heatmap_df=heatmap_df,
+        bv_summary=bv_summary,
+        trend_bv_summary=trend_bv_summary,
+        bv_heatmap=bv_heatmap,
     )
 
 
@@ -373,6 +399,17 @@ def export_regime_report(
     md_lines.append(_md_table(summaries.get("vol_summary")))  # type: ignore
     md_lines.append("\n## Summary by Trend × Vol")
     md_lines.append(_md_table(summaries.get("combo_summary")))  # type: ignore
+
+    md_lines.append("\n## Summary by BetterVolume")
+    md_lines.append(_md_table(summaries.get("bv_summary")))
+
+    md_lines.append("\n## Summary by Trend × BetterVolume")
+    md_lines.append(_md_table(summaries.get("trend_bv_summary")))
+
+    bv_heatmap = summaries.get("bv_heatmap")
+    if bv_heatmap is not None and not bv_heatmap.empty:
+        md_lines.append("\n## PnL by Trend × BetterVolume (table)")
+        md_lines.append(bv_heatmap.to_markdown())
 
     # Include heatmap table directly in markdown (no image file)
     heatmap_df = summaries.get("heatmap_df")

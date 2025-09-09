@@ -9,8 +9,12 @@ from .margin_calls import (
     can_open_order,
     pick_worst_trade,
     margin_level_pct,
+    pick_biggest_lot,
     margin_level_pct_worst_bar,
     should_force_liquidation,
+    used_margin,
+    floating_pnl_worst_bar,
+    free_margin,
 )
 from .break_even import update_break_even
 from .trailing_sl import update_trailing_sl, update_trailing_tp
@@ -21,11 +25,14 @@ from .audit import log
 def liquidation_fill_price(
     cfg: BrokerConfig, tr: Trade, high: float, low: float, t
 ) -> float:
-    return (
-        fill_price_on_close(cfg, "sell", low, t=t)
-        if tr.side == "buy"
-        else fill_price_on_close(cfg, "buy", high, t=t)
-    )
+    if tr.side == "buy":
+        side, ref = "sell", low
+    else:
+        side, ref = "buy", high
+    exec_price = fill_price_on_close(cfg, side, ref, t=t)
+    baseline = apply_spread_at(cfg, side, ref, t=t)
+    tr.slippage_close_pips = float((exec_price - baseline) / PIP_SIZE)
+    return exec_price
 
 
 class Broker:
@@ -128,25 +135,60 @@ class Broker:
         for tr in list(self.open_trades):
             self.close_trade(tr, price, reason, t)
 
-    def _force_liquidation(self, high: float, low: float, t: pd.Timestamp) -> None:
+    def _force_liquidation(
+        self, high: float, low: float, close: float, t: pd.Timestamp
+    ) -> None:
         while self.open_trades and should_force_liquidation(
-            self.cfg, self.balance, self.open_trades, high, low
+            self.cfg, self.balance, self.open_trades, high, low, close
         ):
-            worst = pick_worst_trade(self.cfg, self.open_trades, high, low)
-            if worst is None:
-                break
-            exec_price = liquidation_fill_price(self.cfg, worst, high, low, t)
-            self.close_trade(worst, exec_price, "Margin Call", t)
-            ml_worst = margin_level_pct_worst_bar(
-                self.cfg, self.balance, self.open_trades, high, low
+            um = used_margin(self.cfg, self.open_trades)
+            eq_worst = self.balance + floating_pnl_worst_bar(
+                self.cfg, self.open_trades, high, low
             )
-            log(
-                self.events_log,
-                type="margin_call",
-                time=t,
-                ml_worst=ml_worst,
-                trade_id=worst.id,
-            )
+            fm_worst = eq_worst - um
+            ml_worst = 999999.0 if um == 0 else (eq_worst / um) * 100.0
+            fm_cur = free_margin(self.cfg, self.balance, self.open_trades, close)
+
+            # 1) current free margin < 0 → close biggest lot at close
+            if fm_cur < 0.0:
+                tr_to_close = pick_biggest_lot(self.open_trades)
+                side = "sell" if tr_to_close.side == "buy" else "buy"
+                exec_price = fill_price_on_close(self.cfg, side, close, t=t)
+                baseline = apply_spread_at(self.cfg, side, close, t=t)
+                tr_to_close.slippage_close_pips = float(
+                    (exec_price - baseline) / PIP_SIZE
+                )
+                self.close_trade(tr_to_close, exec_price, "Close Low Margin", t)
+                log(
+                    self.events_log,
+                    type="low_margin_close",
+                    time=t,
+                    ml_worst=ml_worst,
+                    fm_worst=fm_worst,
+                    fm_current=fm_cur,
+                    trade_id=tr_to_close.id,
+                )
+                continue
+
+            # 2) worst-bar stop-out → close worst PnL at adverse extreme
+            if (ml_worst < self.cfg.STOP_OUT_LEVEL_PCT) or (fm_worst < 0.0):
+                tr_to_close = pick_worst_trade(self.cfg, self.open_trades, high, low)
+                if tr_to_close is None:
+                    break
+                exec_price = liquidation_fill_price(self.cfg, tr_to_close, high, low, t)
+                self.close_trade(tr_to_close, exec_price, "Margin Call", t)
+                log(
+                    self.events_log,
+                    type="margin_call",
+                    time=t,
+                    ml_worst=ml_worst,
+                    fm_worst=fm_worst,
+                    fm_current=fm_cur,
+                    trade_id=tr_to_close.id,
+                )
+                continue
+
+            break
 
     def open_trade(
         self,
@@ -296,16 +338,17 @@ class Broker:
                 t=t,
             )
 
-            update_trailing_tp(
-                tr,
-                high,
-                low,
-                cfg=self.cfg,
-                events_log=self.events_log,
-                t=t,
-                near_tp_buffer_pips=tr.near_tp_buffer_pips,
-                tp_extension_pips=tr.tp_extension_pips,
-            )
+            if tr.near_tp_buffer_pips is not None or tr.tp_extension_pips is not None:
+                update_trailing_tp(
+                    tr,
+                    high,
+                    low,
+                    cfg=self.cfg,
+                    events_log=self.events_log,
+                    t=t,
+                    near_tp_buffer_pips=tr.near_tp_buffer_pips,
+                    tp_extension_pips=tr.tp_extension_pips,
+                )
 
             if tr.side == "buy":
                 if tr.sl is not None and low <= tr.sl:
@@ -341,7 +384,7 @@ class Broker:
             if 0 < ml_worst < 90.0:
                 log(self.events_log, type="margin_warning", time=t, ml_worst=ml_worst)
 
-        self._force_liquidation(high, low, t)
+        self._force_liquidation(high, low, close, t)
 
         cur_day = t.date()
         if cur_day != self._last_swap_day:

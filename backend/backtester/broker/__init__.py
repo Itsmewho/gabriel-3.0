@@ -23,6 +23,8 @@ class BrokerConfig:
     VOLUME_MIN: float
     MIN_SLIPPAGE_PIPS: int = 0
     MAX_SLIPPAGE_PIPS: int = 0
+    EXECUTION_LATENCY_MS: int = 0
+    NIGHT_SPREAD_PIPS: float | None = None
     COMMISSION_PER_LOT_PER_SIDE: float | None = None
     RESUME_MARGIN_LEVEL_PCT: float = 120.0  # auto-resume threshold
     AUTO_PAUSE_ON_REJECTION: bool = True  # pause after all fallbacks fail

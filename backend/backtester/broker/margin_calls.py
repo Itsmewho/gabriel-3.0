@@ -11,6 +11,12 @@ def used_margin(cfg: BrokerConfig, trades) -> float:
     return sum(abs(t.lot_size) * cfg.MARGIN_PER_LOT for t in trades)
 
 
+def pick_biggest_lot(trades):
+    if not trades:
+        return None
+    return max(trades, key=lambda t: abs(getattr(t, "lot_size", 0.0)))
+
+
 def _pips_from(tr, price: float) -> float:
     if tr.side == "buy":
         return (price - tr.entry_price) / PIP_SIZE
@@ -43,9 +49,6 @@ def margin_level_pct(cfg: BrokerConfig, balance: float, trades, price: float) ->
     um = used_margin(cfg, trades)
     eq = equity(cfg, balance, trades, price)
     return 999999.0 if um == 0 else (eq / um) * 100.0
-
-
-# --- Worst-bar variants (use intrabar extremes) ---
 
 
 def floating_pnl_worst_bar(cfg: BrokerConfig, trades, high: float, low: float) -> float:
@@ -117,15 +120,22 @@ def pick_worst_trade(cfg: BrokerConfig, trades, high: float, low: float):
     return losses[0][1]
 
 
-# --- New helpers for broker liquidation policy ---
-
-
 def should_force_liquidation(
-    cfg: BrokerConfig, balance: float, trades, high: float, low: float
+    cfg: BrokerConfig, balance: float, trades, high: float, low: float, close: float
 ) -> bool:
-    """Trigger liquidation if either margin level or equity is unsafe at worst bar."""
+    """Liquidate if any unsafe condition is present."""
     if not trades:
         return False
-    ml_worst = margin_level_pct_worst_bar(cfg, balance, trades, high, low)
-    eq_worst = worst_case_equity(cfg, balance, trades, high, low)
-    return (ml_worst < cfg.STOP_OUT_LEVEL_PCT) or (eq_worst < 0.0)
+
+    um = used_margin(cfg, trades)
+
+    # Worst-bar (intrabar extreme)
+    eq_worst = balance + floating_pnl_worst_bar(cfg, trades, high, low)
+    fm_worst = eq_worst - um
+    ml_worst = 999999.0 if um == 0 else (eq_worst / um) * 100.0
+
+    # Current bar (close)
+    eq_cur = equity(cfg, balance, trades, close)
+    fm_cur = eq_cur - um
+
+    return (ml_worst < cfg.STOP_OUT_LEVEL_PCT) or (fm_worst < 0.0) or (fm_cur < 0.0)

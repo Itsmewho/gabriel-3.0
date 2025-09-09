@@ -17,8 +17,10 @@ BACKTEST_CONFIG = {
     "MARGIN_PER_LOT": 3882.02,
     "STOP_OUT_LEVEL_PCT": 50.0,
     # Slippage
-    "MIN_SLIPPAGE_PIPS": 0.3,
-    "MAX_SLIPPAGE_PIPS": 1,
+    "MIN_SLIPPAGE_PIPS": 0,
+    "MAX_SLIPPAGE_PIPS": 0,
+    "EXECUTION_LATENCY_MS": 0,
+    "NIGHT_SPREAD_PIPS": None,
     # Sizing & risk
     "VOLUME_STEP": 0.01,
     "VOLUME_MIN": 0.01,

@@ -5,14 +5,19 @@ from . import Trade, BrokerConfig, PIP_SIZE
 from .cost_engine import apply_spread_at, commission_open, fill_price_on_open
 
 
-def calc_sl_tp(
-    entry: float, side: str, sl_pips: float, tp_pips: float
-) -> tuple[float, float]:
-    sl_adj = sl_pips * PIP_SIZE
-    tp_adj = tp_pips * PIP_SIZE
-    if side == "buy":
-        return entry - sl_adj, entry + tp_adj
-    return entry + sl_adj, entry - tp_adj
+def calc_sl_tp(entry: float, side: str, sl_pips: float | None, tp_pips: float | None):
+    sl = None
+    tp = None
+
+    if sl_pips is not None and sl_pips > 0:
+        sl_adj = sl_pips * PIP_SIZE
+        sl = entry - sl_adj if side == "buy" else entry + sl_adj
+
+    if tp_pips is not None and tp_pips > 0:
+        tp_adj = tp_pips * PIP_SIZE
+        tp = entry + tp_adj if side == "buy" else entry - tp_adj
+
+    return sl, tp
 
 
 def open_trade(

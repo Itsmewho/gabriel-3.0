@@ -13,10 +13,7 @@ from backtester.config.backtest_config import BACKTEST_CONFIG
 
 # Auditors
 from backtester.account_management.account_audit import export_account_audit
-from backtester.broker.audit import (
-    audit_trades,
-    audit_rejections,
-)
+from backtester.broker.audit import audit_trades, audit_rejections, audit_margin_events
 
 # Account management
 from backtester.account_management import (
@@ -27,14 +24,13 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-# from backtester.strategies.sma_two_step import EmaTwoStepSignal
-from backtester.strategies.test_sma import MultiStageConfirmationCross
-
+from backtester.strategies.test_config_strat import RandomEntryStrategyFixed
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
 
 # Evals
+
 from backtester.performance.plots_generator import generate_plots
 from backtester.performance.md_reports import generate_markdown_report
 from backtester.performance.trade_svg import export_trades_csv
@@ -69,11 +65,14 @@ def prepare_data(
         except Exception as e:
             logger.warning(f"Could not delete cache {data_file}: {e}")
 
-    # Ask for only what this run needs; missing cols are appended to the same parquet later.
     feature_spec = {
-        "ema": [3, 5, 14, 20, 30, 45, 50, 100, 200, 300, 400, 600],
-        "sma_high": [5, 60, 65, 67, 70],
-        "sma_low": [5, 60, 65, 67, 70],
+        "ema": [300, 500, 1440, 7200],
+        "kc": [{"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"}],
+        "atr": [14],
+        "rsi": [24],
+        "stoch": [
+            {"k_period": 5, "d_period": 5, "slowing": 5},
+        ],
     }
 
     df = ensure_feature_parquet(
@@ -114,11 +113,15 @@ def run_period(
         logger.error(f"No market data for period {period_tag}. Skipping.")
         return
 
-    STRATEGY_NAME = "EMA_TEST"
+    STRATEGY_NAME = "TEST"
     feature_spec = {
-        "ema": [3, 5, 14, 20, 45],
-        "sma_high": [5],
-        "sma_low": [5],
+        "ema": [300, 500, 1440, 7200],
+        "kc": [{"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"}],
+        "atr": [14],
+        "rsi": [24],
+        "stoch": [
+            {"k_period": 5, "d_period": 5, "slowing": 5},
+        ],
     }
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
@@ -126,11 +129,11 @@ def run_period(
     cfg_map = {
         STRATEGY_NAME: StrategyConfig(
             risk_mode=RiskMode.FIXED,
-            risk_pct=0.03,
+            risk_pct=0.01,
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.03,
+            max_risk_pct_per_trade=0.01,
             max_drawdown_pct=0.30,
             max_concurrent_trades=100,
         )
@@ -138,47 +141,21 @@ def run_period(
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        MultiStageConfirmationCross(
+        RandomEntryStrategyFixed(
             symbol=symbol,
             config={
-                # "name": STRATEGY_NAME,
-                # "FAST_PACK": [
-                #     "sma_high_5",
-                #     "sma_low_5",
-                #     "ema_5",
-                #     "ema_14",
-                #     "ema_20",
-                # ],
-                # # Define the signal lines for each stage and side
-                # "STAGE1_SIGNAL": {
-                #     "buy": "ema_45",
-                #     "sell": "ema_14",
-                # },
-                # "STAGE2_SIGNAL": {
-                #     "buy": "ema_20",
-                #     "sell": "ema_20",
-                # },
-                # "STAGE3_SIGNAL": {
-                #     "buy": "ema_14",
-                #     "sell": "ema_45",
-                # },
-                # "CONFIRM_WINDOW_BARS": 15,  # Timer for Stage 2
-                # "COOLDOWN_BARS": 1,
-                # "EPS": 0.0,
-                # # Risk management
-                # "USE_BREAK_EVEN_STOP": False,
-                # "BE_TRIGGER_PIPS": 30,  # when +8 pips in favor…
-                # "BE_OFFSET_PIPS": 20,  # …move SL to +3 pips -> cant move above Triggerpips
-                # # Trail only after momentum proves itself
-                # "USE_TRAILING_STOP": False,
-                # "TRAILING_STOP_DISTANCE_PIPS": 10,  # tighter than 30, not too tight
-                # # Extend TP if price is pushing near it (runner mode)
-                # "USE_TP_EXTENSION": False,
-                # "NEAR_TP_BUFFER_PIPS": 10,  # start stretching when within 15 pips
-                # "TP_EXTENSION_PIPS": 30,  # add 30 pips per extension
-                # # base SL/TP per trade
-                # "SL_PIPS": 2,
-                # "TP_PIPS": 8,
+                "name": STRATEGY_NAME,
+                "EVERY_N_MINUTES": 900,
+                "SL_PIPS": 18,
+                "TP_PIPS": 27,
+                "USE_BREAK_EVEN_STOP": True,
+                "BE_TRIGGER_PIPS": 8,
+                "BE_OFFSET_PIPS": 1,
+                "USE_TRAILING_STOP": True,
+                "TRAILING_STOP_DISTANCE_PIPS": 10,
+                "USE_TP_EXTENSION": True,
+                "NEAR_TP_BUFFER_PIPS": 2,
+                "TP_EXTENSION_PIPS": 3,
             },
             strat_cfg=cfg_map[STRATEGY_NAME],
             governor=governor,
@@ -196,7 +173,6 @@ def run_period(
     metrics_dir = base_out_dir / "metrics"
     regime_dir = metrics_dir / "regime"
 
-    # Ensure all output directories are created
     audit_dir.mkdir(parents=True, exist_ok=True)
     evals_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -204,27 +180,52 @@ def run_period(
 
     # --- Backtest loop ---
     alloc = cfg.INITIAL_BALANCE
-    allocations = {STRATEGY_NAME: alloc * 1}
+    allocations = {STRATEGY_NAME: alloc}
     ledger = Ledger(initial_allocations=allocations)
     trade_to_strategy: dict[int, str] = {}
+    last_closed_idx = 0
+
+    # Seed governor with initial equity so drawdown logic has a baseline
+    if governor:
+        for sid, eq0 in allocations.items():
+            governor.on_equity(sid, eq0)
 
     for ts, row in market_data.iterrows():
+        # 1) Strategy decisions
         for strat in strategies:
             tr = strat.on_bar(broker, ts, row)
             if tr:
                 trade_to_strategy[tr.id] = strat.name
                 ledger.on_open(strat.name, ts, trade_id=tr.id)
+                if governor:
+                    governor.on_open(strat.name)
+
+        # 2) Broker lifecycle on this bar
         broker.on_bar(float(row["high"]), float(row["low"]), float(row["close"]), t=ts)
 
-    for tr in broker.trade_history:
-        sid = trade_to_strategy.get(tr.id, "UNKNOWN")
-        ledger.on_close(sid, tr.exit_time, pnl=tr.pnl, trade_id=tr.id)
+        # 3) Book any newly closed trades immediately and update governor/ledger
+        if last_closed_idx < len(broker.trade_history):
+            for trc in broker.trade_history[last_closed_idx:]:
+                sid = trade_to_strategy.get(trc.id, STRATEGY_NAME)
+                ledger.on_close(sid, trc.exit_time, pnl=trc.pnl, trade_id=trc.id)
+                if governor:
+                    governor.on_close(sid)
+                    governor.on_equity(sid, ledger.equity(sid))
+            last_closed_idx = len(broker.trade_history)
 
     # --- Reports Section ---
     trade_df = trades_to_df(broker.trade_history)
 
+    dd_thresholds = {STRATEGY_NAME: cfg_map[STRATEGY_NAME].max_drawdown_pct}
+    resume_thresholds = {
+        STRATEGY_NAME: getattr(cfg_map[STRATEGY_NAME], "max_drawdown_resume_pct", 0.90)
+    }
+
     export_account_audit(
-        ledger.snapshot_df(), str(audit_dir / f"account_ledger_{period_tag}.csv")
+        ledger.snapshot_df(),
+        str(audit_dir / f"account_ledger_{period_tag}.csv"),
+        dd_thresholds=dd_thresholds,
+        resume_thresholds=resume_thresholds,
     )
     audit_trades(
         broker.trade_history, str(audit_dir / f"{symbol}_trade_audit_{period_tag}.csv")
@@ -232,10 +233,13 @@ def run_period(
     audit_rejections(
         broker.rejections, str(audit_dir / f"{symbol}_rejected_trades_{period_tag}.csv")
     )
+    audit_margin_events(
+        broker.events_log, str(audit_dir / f"{symbol}_margin_events_{period_tag}.csv")
+    )
     export_trades_csv(
         broker.trade_history, str(evals_dir / f"{symbol}_trade_report_{period_tag}.csv")
     )
-    # Generate Regime Report
+
     if not trade_df.empty:
         regime_report(
             trades_or_df=trade_df,
@@ -245,7 +249,6 @@ def run_period(
             period_tag=period_tag,
         )
 
-    # Generate main Markdown Report
     generate_markdown_report(
         trades=broker.trade_history,
         initial_balance=cfg.INITIAL_BALANCE,
@@ -254,7 +257,6 @@ def run_period(
         period_tag=period_tag,
     )
 
-    # Generate ALL Plots
     if market_data is not None:
         generate_plots(
             trades=broker.trade_history,
@@ -265,7 +267,6 @@ def run_period(
             feature_spec=feature_spec,
         )
 
-    # Generate Audit and CSV files
     plot_trades(
         market_data,
         broker.trade_history,
@@ -312,15 +313,24 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        ("2009-10-05", "2009-10-05")  # For Testing broker
-        # ("2009-10-01", "2010-10-01"),  # Bank collapse
-        # ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
-        # ("2017-04-01", "2018-04-01"),  # Bull market
-        # ("2021-05-01", "2022-10-15"),  # Bear (covid)
-        # ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
-        # ("2014-11-01", "2024-11-01"),  # Long run (mixed)
-        # ("2025-01-01", "2025-09-04"),  # Current year
-        # ("2023-09-01", "2025-09-04"),  # last 2 years
+        ("2010-06-04", "2010-09-09"),  # Testing periode (volitile)
+        ("2014-06-29", "2015-01-01"),  # Testing periode (down )
+        ("2009-10-01", "2010-10-01"),  # Bank collapse
+        ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
+        ("2017-04-01", "2018-04-01"),  # Bull market
+        ("2021-05-01", "2022-10-15"),  # Bear (covid)
+        ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
+        ("2025-01-01", "2025-09-04"),  # Current year
+        ("2023-09-01", "2025-09-04"),  # last 2 years
+        ("2014-01-01", "2015-01-01"),  # Long run (mixed)
+        ("2015-01-01", "2016-01-01"),  # Long run (mixed)
+        ("2016-01-01", "2017-01-01"),  # Long run (mixed)
+        ("2017-01-01", "2018-01-01"),  # Long run (mixed)
+        ("2018-01-01", "2019-01-01"),  # Long run (mixed)
+        ("2019-01-01", "2020-01-01"),  # Long run (mixed)
+        ("2020-01-01", "2021-01-01"),  # Long run (mixed)
+        ("2021-01-01", "2022-01-01"),  # Long run (mixed)
+        ("2022-01-01", "2023-01-01"),  # Long run (mixed)
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

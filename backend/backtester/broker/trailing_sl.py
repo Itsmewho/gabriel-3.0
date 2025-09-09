@@ -58,15 +58,35 @@ def update_trailing_tp(
     near_tp_buffer_pips: float | None = None,
     tp_extension_pips: float | None = None,
 ):
-    """Monotonic TP extension using absolute price action (high/low).
-    Long: TP can only go UP and must remain above current price.
-    Short: TP can only go DOWN and must remain below current price.
+    """
+    Monotonic TP extension using absolute price action (high/low).
+
+    OPT-IN: Only runs if strategy explicitly provides per-trade params
+    (near_tp_buffer_pips and/or tp_extension_pips). If both are None,
+    this function does nothing (ignores cfg defaults).
     """
     if tr.tp is None:
         return
 
-    buf = (near_tp_buffer_pips or cfg.NEAR_TP_BUFFER_PIPS) * PIP_SIZE
-    ext = (tp_extension_pips or cfg.TP_EXTENSION_PIPS) * PIP_SIZE
+    # --- OPT-IN GUARD ---
+    if near_tp_buffer_pips is None and tp_extension_pips is None:
+        return
+
+    # Treat non-positive values as disabled
+    if (near_tp_buffer_pips is not None and near_tp_buffer_pips <= 0) or (
+        tp_extension_pips is not None and tp_extension_pips <= 0
+    ):
+        return
+
+    # Prefer per-trade values; if only one provided, both must be valid to proceed
+    buf_src = near_tp_buffer_pips
+    ext_src = tp_extension_pips
+    if buf_src is None or ext_src is None:
+        # If one is missing, do not fall back to cfg — remain opt-in only
+        return
+
+    buf = buf_src * PIP_SIZE
+    ext = ext_src * PIP_SIZE
     old_tp = tr.tp
 
     if tr.tp_first is None:
@@ -80,7 +100,7 @@ def update_trailing_tp(
             proposed = old_tp + ext
             floor = max(old_tp, tr.tp_first)
             cand = max(proposed, floor)
-            # MT5-like guard: TP for buys must remain above market (use bar high as proxy)
+            # guard: TP for buys must remain above market (use bar high as proxy)
             if cand > high:
                 new_tp = cand
     else:
@@ -88,7 +108,7 @@ def update_trailing_tp(
             proposed = old_tp - ext
             ceil = min(old_tp, tr.tp_first)
             cand = min(proposed, ceil)
-            # MT5-like guard: TP for sells must remain below market (use bar low as proxy)
+            # guard: TP for sells must remain below market (use bar low as proxy)
             if cand < low:
                 new_tp = cand
 

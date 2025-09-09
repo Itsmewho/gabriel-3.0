@@ -6,9 +6,19 @@ import pandas as pd
 # base fetchers/builders
 from backtester.data.loaders import fetch_sql_market_data, fetch_event_features
 from backtester.features.base_features import apply_basic_features
-
+from backtester.features.better_volume_indicator import add_better_volume_mql
 
 OHLC = ["open", "high", "low", "close", "tick_volume"]
+
+
+def _ensure_list(x: Any) -> List[Dict[str, Any]]:
+    if not x:
+        return []
+    if isinstance(x, list):
+        return x
+    if isinstance(x, dict):
+        return [x]
+    raise TypeError("spec must be a dict or list of dicts")
 
 
 def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
@@ -28,14 +38,39 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
         out.add(f"rsi_{int(n)}")
     for n in spec.get("atr", []):
         out.add(f"atr_{int(n)}")
-    # Volume
+    # Volume SMA
     for n in spec.get("vol_sma", []):
         out.add(f"volume_sma_{int(n)}")
     # Bollinger
     if "bb" in spec:
         n = int(spec["bb"].get("n", 20))
         out.update([f"bb_{n}_mid", f"bb_{n}_upper", f"bb_{n}_lower"])
+    # Keltner
+    if "kc" in spec:
+        for kc in _ensure_list(spec.get("kc")):
+            n = int(kc.get("n", 20))
+            atr_n = int(kc.get("atr_n", n))
+            m = float(kc.get("m", 2.0))
+            out.update(
+                {
+                    f"kc_{n}_{atr_n}_{m}_mid",
+                    f"kc_{n}_{atr_n}_{m}_upper",
+                    f"kc_{n}_{atr_n}_{m}_lower",
+                }
+            )
 
+    # --- ADDED: Stochastic Oscillator ---
+    if "stoch" in spec:
+        for stoch in _ensure_list(spec.get("stoch")):
+            k = int(stoch.get("k_period", 14))
+            d = int(stoch.get("d_period", 3))
+            s = int(stoch.get("slowing", 3))
+            out.add(f"stoch_{k}_{d}_{s}_k")
+            out.add(f"stoch_{k}_{d}_{s}_d")
+
+    # Better Volume context color
+    if spec.get("better_volume"):
+        out.add("bv_color")
     return out
 
 
@@ -46,57 +81,38 @@ def _sub_spec_for_missing(
         return {}
     sub: Dict[str, Any] = {}
 
-    # helper to include only the parts we need
-    def _need(keys: List[str]) -> bool:
-        return any(k in missing for k in keys)
-
     # SMA family
-    want_sma = []
-    for n in spec.get("sma", []):
-        if f"sma_{int(n)}" in missing:
-            want_sma.append(int(n))
+    want_sma = [int(n) for n in spec.get("sma", []) if f"sma_{int(n)}" in missing]
     if want_sma:
         sub["sma"] = want_sma
 
-    want_sma_high = []
-    for n in spec.get("sma_high", []):
-        if f"sma_high_{int(n)}" in missing:
-            want_sma_high.append(int(n))
+    want_sma_high = [
+        int(n) for n in spec.get("sma_high", []) if f"sma_high_{int(n)}" in missing
+    ]
     if want_sma_high:
         sub["sma_high"] = want_sma_high
 
-    want_sma_low = []
-    for n in spec.get("sma_low", []):
-        if f"sma_low_{int(n)}" in missing:
-            want_sma_low.append(int(n))
+    want_sma_low = [
+        int(n) for n in spec.get("sma_low", []) if f"sma_low_{int(n)}" in missing
+    ]
     if want_sma_low:
         sub["sma_low"] = want_sma_low
 
-    want_ema = []
-    for n in spec.get("ema", []):
-        if f"ema_{int(n)}" in missing:
-            want_ema.append(int(n))
+    want_ema = [int(n) for n in spec.get("ema", []) if f"ema_{int(n)}" in missing]
     if want_ema:
         sub["ema"] = want_ema
 
-    want_rsi = []
-    for n in spec.get("rsi", []):
-        if f"rsi_{int(n)}" in missing:
-            want_rsi.append(int(n))
+    want_rsi = [int(n) for n in spec.get("rsi", []) if f"rsi_{int(n)}" in missing]
     if want_rsi:
         sub["rsi"] = want_rsi
 
-    want_atr = []
-    for n in spec.get("atr", []):
-        if f"atr_{int(n)}" in missing:
-            want_atr.append(int(n))
+    want_atr = [int(n) for n in spec.get("atr", []) if f"atr_{int(n)}" in missing]
     if want_atr:
         sub["atr"] = want_atr
 
-    want_vol_sma = []
-    for n in spec.get("vol_sma", []):
-        if f"volume_sma_{int(n)}" in missing:
-            want_vol_sma.append(int(n))
+    want_vol_sma = [
+        int(n) for n in spec.get("vol_sma", []) if f"volume_sma_{int(n)}" in missing
+    ]
     if want_vol_sma:
         sub["vol_sma"] = want_vol_sma
 
@@ -105,6 +121,35 @@ def _sub_spec_for_missing(
         cols = {f"bb_{n}_mid", f"bb_{n}_upper", f"bb_{n}_lower"}
         if cols & missing:
             sub["bb"] = spec["bb"]
+
+    if "kc" in spec:
+        need_kc: List[Dict[str, Any]] = []
+        for kc in _ensure_list(spec.get("kc")):
+            n = int(kc.get("n", 20))
+            atr_n = int(kc.get("atr_n", n))
+            m = float(kc.get("m", 2.0))
+            cols = {
+                f"kc_{n}_{atr_n}_{m}_mid",
+                f"kc_{n}_{atr_n}_{m}_upper",
+                f"kc_{n}_{atr_n}_{m}_lower",
+            }
+            if cols & missing:
+                need_kc.append(kc)
+        if need_kc:
+            sub["kc"] = need_kc if len(need_kc) > 1 else need_kc[0]
+
+    # --- ADDED: Stochastic Oscillator ---
+    if "stoch" in spec:
+        need_stoch: List[Dict[str, Any]] = []
+        for stoch in _ensure_list(spec.get("stoch")):
+            k = int(stoch.get("k_period", 14))
+            d = int(stoch.get("d_period", 3))
+            s = int(stoch.get("slowing", 3))
+            cols = {f"stoch_{k}_{d}_{s}_k", f"stoch_{k}_{d}_{s}_d"}
+            if cols & missing:
+                need_stoch.append(stoch)
+        if need_stoch:
+            sub["stoch"] = need_stoch if len(need_stoch) > 1 else need_stoch[0]
 
     return sub
 
@@ -152,6 +197,7 @@ def ensure_feature_parquet(
         df.to_parquet(fname)
 
     # Ensure requested features
+    spec = spec or {}
     want_cols = _spec_columns(spec)
     missing = {c for c in want_cols if c not in df.columns}
     if missing:
@@ -161,5 +207,16 @@ def ensure_feature_parquet(
             base = apply_basic_features(base, cfg=sub)
             df = base
             df.to_parquet(fname)
+
+    # Better Volume computed after apply_basic_features
+    if spec.get("better_volume") and "bv_color" not in df.columns:
+        lookback = 20
+        bv_cfg = spec.get("better_volume")
+        if isinstance(bv_cfg, dict):
+            lookback = int(bv_cfg.get("lookback", 20))
+        # Compute and append
+        bv_df = add_better_volume_mql(df.copy(), lookback=lookback)
+        df["bv_color"] = bv_df["bv_color"].astype("string")
+        df.to_parquet(fname)
 
     return df

@@ -34,12 +34,6 @@ class SmaCrossoverSimple(BaseStrategy):
         self.slow = int(config.get("SLOW_MA", 24))
         self.sl_pips = float(config.get("SL_PIPS", 10))
         self.tp_pips = float(config.get("TP_PIPS", 50))
-        self.be_trigger_extra = float(
-            config.get("BE_TRIGGER_EXTRA_PIPS", 1)
-        )  # added: BE beyond 1R by N pips
-        self.be_offset = float(config.get("BE_OFFSET_PIPS", 2))
-        self.trail_distance_pips = float(config.get("TRAILING_STOP_DISTANCE_PIPS", 10))
-        self.use_trailing = bool(config.get("USE_TRAILING_STOP", True))
         self.magic = magic
         self.prev_row: Optional[pd.Series] = None
 

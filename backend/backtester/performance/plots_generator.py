@@ -1,16 +1,26 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Iterable, Dict, Any, Mapping
+from typing import Iterable, Dict, Any, Mapping, List, Union
 import pandas as pd
 import numpy as np
 import mplfinance as mpf
 import matplotlib.pyplot as plt
 import random
+import warnings
 
+from concurrent.futures import ProcessPoolExecutor
 
 from backtester.broker import Trade
 from backtester.features.better_volume_indicator import add_better_volume_mql
 
+# This tells Python to ignore any UserWarning with that specific message
+warnings.filterwarnings(
+    "ignore",
+    message='Creating legend with loc="best" can be slow with large amounts of data.',
+)
+
+
+# Import the executor for parallel processing
 DARK_BLUE = "#0d47a1"
 
 
@@ -94,6 +104,17 @@ def _ensure_ohlc_columns(
     return dfc
 
 
+# --- ADDED: Helper for Stochastic configs ---
+def _iter_stoch_configs(
+    stoch_cfg: Union[Dict[str, Any], List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    if stoch_cfg is None:
+        return []
+    if isinstance(stoch_cfg, list):
+        return stoch_cfg
+    return [stoch_cfg]
+
+
 def _plot_trades_on_chart(
     market_data: pd.DataFrame,
     trades_df: pd.DataFrame,
@@ -102,6 +123,9 @@ def _plot_trades_on_chart(
     enable_better_volume: bool = True,
     warn_cap: int | None = None,
 ):
+    """
+    Designed for use by ProcessPoolExecutor.
+    """
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
     feature_spec = feature_spec or {}
 
@@ -130,9 +154,9 @@ def _plot_trades_on_chart(
     for _, trade in trades_df.iterrows():
         if pd.notna(trade.get("entry_time")) and pd.notna(trade.get("side")):
             ts = _nearest(pd.to_datetime(trade["entry_time"]).tz_localize(None))
-            if trade["side"].lower() == "buy":
+            if str(trade["side"]).lower() == "buy":
                 buy.loc[ts] = trade["entry_price"]  # type: ignore
-            elif trade["side"].lower() == "sell":
+            elif str(trade["side"]).lower() == "sell":
                 sell.loc[ts] = trade["entry_price"]  # type: ignore
         if pd.notna(trade.get("exit_time")):
             ts = _nearest(pd.to_datetime(trade["exit_time"]).tz_localize(None))
@@ -152,12 +176,12 @@ def _plot_trades_on_chart(
         )
         prof = (
             (trade["exit_price"] > trade["entry_price"])
-            if trade["side"].lower() == "buy"
+            if str(trade["side"]).lower() == "buy"
             else (trade["exit_price"] < trade["entry_price"])
         )
         seg_colors.append("green" if prof else "red")
 
-    add_plots = []
+    add_plots: list = []
     if np.isfinite(buy.values).any():  # type: ignore
         add_plots.append(
             mpf.make_addplot(
@@ -181,6 +205,7 @@ def _plot_trades_on_chart(
     current_panel = 1
     volume_panel = -1
     rsi_panel = -1
+    stoch_panel = -1  # --- ADDED ---
 
     if use_better_volume:
         volume_panel = current_panel
@@ -191,6 +216,17 @@ def _plot_trades_on_chart(
     )
     if has_rsi:
         rsi_panel = current_panel
+        current_panel += 1
+
+    # --- ADDED: Panel detection for Stochastic ---
+    stoch_configs = _iter_stoch_configs(feature_spec.get("stoch"))
+    has_stoch = stoch_configs and any(
+        f"stoch_{s.get('k_period', 14)}_{s.get('d_period', 3)}_{s.get('slowing', 3)}_k"
+        in df.columns
+        for s in stoch_configs
+    )
+    if has_stoch:
+        stoch_panel = current_panel
         current_panel += 1
 
     colors = {
@@ -248,6 +284,57 @@ def _plot_trades_on_chart(
                 mpf.make_addplot(df[bb_lower], color="blue", linestyle="--")
             )
 
+    # --- Keltner Channels overlay ---
+    fill_between_cfg = []
+
+    if "kc" in feature_spec:
+        for kc_cfg in feature_spec["kc"]:
+            n = kc_cfg.get("n", 20)
+            atr_n = kc_cfg.get("atr_n", 20)
+            m = kc_cfg.get("m", 2.0)
+            mid_col = f"kc_{n}_{atr_n}_{m}_mid"
+            upper_col = f"kc_{n}_{atr_n}_{m}_upper"
+            lower_col = f"kc_{n}_{atr_n}_{m}_lower"
+
+            if mid_col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[mid_col],
+                        color="white",  # enforce white
+                        linestyle="-",
+                        width=0.6,
+                        label=f"KC Mid {n}/{atr_n}/{m}",
+                    )
+                )
+            if upper_col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[upper_col],
+                        color="white",  # enforce white
+                        linestyle="--",
+                        width=0.6,
+                    )
+                )
+            if lower_col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[lower_col],
+                        color="white",  # enforce white
+                        linestyle="--",
+                        width=0.6,
+                    )
+                )
+
+            # Optional shading between upper and lower
+            if upper_col in df.columns and lower_col in df.columns:
+                add_plots.append(
+                    mpf.make_addplot(
+                        df[upper_col].combine(df[lower_col], max),
+                        color="white",
+                        alpha=0.1,
+                        width=0.0,
+                    )
+                )
     if has_rsi:
         for period in feature_spec["rsi"]:
             col = f"rsi_{period}"
@@ -271,6 +358,54 @@ def _plot_trades_on_chart(
                 panel=rsi_panel,
                 color="green",
                 linestyle="--",
+            )
+        )
+
+    # --- ADDED: Stochastic Oscillator Plotting ---
+    if has_stoch:
+        for stoch in stoch_configs:
+            k = int(stoch.get("k_period", 14))
+            d = int(stoch.get("d_period", 3))
+            s = int(stoch.get("slowing", 3))
+
+            k_col = f"stoch_{k}_{d}_{s}_k"
+            d_col = f"stoch_{k}_{d}_{s}_d"
+
+            # Plot %K line
+            if k_col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[k_col],
+                        panel=stoch_panel,
+                        ylabel="Stoch",
+                        color="lightseagreen",
+                    )
+                )
+            # Plot %D line
+            if d_col in df.columns:
+                feature_plots.append(
+                    mpf.make_addplot(
+                        df[d_col], panel=stoch_panel, color="red", linestyle="--"
+                    )
+                )
+
+        # Add overbought/oversold lines
+        feature_plots.append(
+            mpf.make_addplot(
+                pd.Series(80, index=df.index),
+                panel=stoch_panel,
+                color="blue",
+                linestyle=":",
+                width=0.7,
+            )
+        )
+        feature_plots.append(
+            mpf.make_addplot(
+                pd.Series(20, index=df.index),
+                panel=stoch_panel,
+                color="blue",
+                linestyle=":",
+                width=0.7,
             )
         )
 
@@ -321,15 +456,21 @@ def _plot_trades_on_chart(
             alines=segments, colors=seg_colors, linewidths=0.7, alpha=0.9
         )
 
-    fig, axes = mpf.plot(df, **plot_kwargs)
+    if fill_between_cfg:
+        plot_kwargs["fill_between"] = fill_between_cfg
+
+    fig, axes = mpf.plot(df, **plot_kwargs, block=False)
     if axes:
-        axes[0].legend(loc="best")
         if use_better_volume and volume_panel > 0 and volume_panel < len(axes):
             axes[volume_panel].set_title("Better Volume", color="white", size=10)
 
     fig.savefig(filename, dpi=600, bbox_inches="tight")
     plt.close(fig)
-    print(f"Plot saved to {filename}")
+
+
+def _plot_wrapper(args):
+    """Helper function to unpack arguments for the executor map."""
+    _plot_trades_on_chart(*args)
 
 
 def _plot_selected_periods(
@@ -340,86 +481,106 @@ def _plot_selected_periods(
     period_tag: str,
     feature_spec: Dict[str, Any] | None = None,
 ):
-    """Plots fixed/random days/weeks and their 6/12-hour close-ups."""
+    """
+    Plots days/weeks with trade activity and random months, along with close-ups.
+    """
     md = market_data.copy()
     if md.index.tz is not None:
         md.index = md.index.tz_localize(None)
 
-    all_days = sorted(md.index.to_period("D").unique())
-    all_weeks = sorted(md.index.to_period("W").unique())
-
     periods_to_plot = {}
 
-    if len(all_days) > 2:
-        periods_to_plot["3rd_day"] = all_days[2]
-    if len(all_days) > 3:
-        periods_to_plot["4th_day"] = all_days[3]
-    if len(all_days) > 7:
-        periods_to_plot["8th_day"] = all_days[7]
-    if len(all_days) > 8:  # Middle and End only make sense with some data
-        periods_to_plot["middle_day"] = all_days[len(all_days) // 2]
-        periods_to_plot["end_day"] = all_days[-3]
+    # --- 1. Select days and weeks with active trades ---
+    if not df_trades.empty:
+        active_days, active_weeks = set(), set()
+        for trade in df_trades.itertuples():
+            # Generate a date range for the duration of the trade
+            trade_duration = pd.date_range(
+                start=trade.entry_time, end=trade.exit_time, freq="D"
+            )
+            active_days.update(trade_duration.to_period("D"))
+            active_weeks.update(trade_duration.to_period("W"))
 
-    # --- Select Fixed Weeks ---
-    if len(all_weeks) > 2:
-        periods_to_plot["3rd_week"] = all_weeks[2]
-    if len(all_weeks) > 3:
-        periods_to_plot["4th_week"] = all_weeks[3]
-    if len(all_weeks) > 7:
-        periods_to_plot["8th_week"] = all_weeks[7]
-    if len(all_weeks) > 8:
-        periods_to_plot["middle_week"] = all_weeks[len(all_weeks) // 2]
-        periods_to_plot["end_week"] = all_weeks[-3]
+        # From the active periods, select a representative sample to plot
+        for periods, name in [
+            (sorted(list(active_days)), "day"),
+            (sorted(list(active_weeks)), "week"),
+        ]:
+            if not periods:
+                continue
 
-    # --- Select Random Periods ---
-    if len(all_days) >= 2:
-        for i, p in enumerate(random.sample(all_days, min(2, len(all_days))), 1):
-            periods_to_plot[f"random_day_{i}"] = p
-    if len(all_weeks) >= 2:
-        for i, p in enumerate(random.sample(all_weeks, min(2, len(all_weeks))), 1):
-            periods_to_plot[f"random_week_{i}"] = p
-    # --- END OF UPDATED SELECTION ---
+            # Select first, middle, and last periods
+            indices_to_get = {0, len(periods) // 2, len(periods) - 1}
+            selected = {periods[i] for i in indices_to_get}
 
-    # 2. Generate plots for each selected period and its close-ups
+            # Add up to 2 random periods for variety
+            num_random = min(2, len(periods))
+            selected.update(random.sample(periods, num_random))
+
+            for i, p in enumerate(sorted(list(selected))):
+                periods_to_plot[f"active_{name}_{i+1}"] = p
+
+    # --- 2. Select three random months for broader context ---
+    all_months = sorted(md.index.to_period("M").unique())
+    if all_months:
+        num_to_sample = min(3, len(all_months))
+        for i, month_period in enumerate(random.sample(all_months, num_to_sample)):
+            periods_to_plot[f"random_month_{i+1}"] = month_period
+
+    # --- 3. Prepare and execute plotting tasks in parallel ---
+    plot_tasks = []
     for p_name, p_val in periods_to_plot.items():
-        period_char = "W" if "week" in p_name else "D"
+        # Robustly get the period character ('D', 'W', or 'M')
+        period_char = p_val.freqstr[0]
         market_data_period = md.loc[p_val.start_time : p_val.end_time]
+
         if market_data_period.empty:
             continue
 
+        # Filter trades relevant to the selected period
         trades_in_period = pd.DataFrame()
         if not df_trades.empty:
             trades_in_period = df_trades[
-                pd.to_datetime(df_trades["entry_time"]).dt.to_period(period_char)
-                == p_val
+                (pd.to_datetime(df_trades["entry_time"]) <= p_val.end_time)
+                & (pd.to_datetime(df_trades["exit_time"]) >= p_val.start_time)
             ]
 
         filename = Path(out_dir) / f"{symbol}_{period_tag}_{p_name}.png"
-        _plot_trades_on_chart(
-            market_data_period, trades_in_period, str(filename), feature_spec
+
+        # Add the main period plot task
+        plot_tasks.append(
+            (market_data_period, trades_in_period, str(filename), feature_spec)
         )
 
-        anchor_time = market_data_period.index[0]
-        base_filename = str(filename).removesuffix(".png")
+        # --- Add close-up plot tasks (e.g., first 6/12 hours of the period) ---
+        if period_char in ("D", "W"):  # Only create close-ups for days/weeks
+            anchor_time = market_data_period.index[0]
+            base_filename = str(filename).removesuffix(".png")
 
-        for hours in [6, 12]:
-            start_time = anchor_time
-            end_time = anchor_time + pd.Timedelta(hours=hours)
-            market_data_slice = market_data_period.loc[start_time:end_time]
-            if market_data_slice.empty:
-                continue
+            for hours in [6, 12]:
+                start_time = anchor_time
+                end_time = anchor_time + pd.Timedelta(hours=hours)
+                market_data_slice = market_data_period.loc[start_time:end_time]
 
-            trades_slice = pd.DataFrame()
-            if not trades_in_period.empty:
-                trades_slice = trades_in_period[
-                    (pd.to_datetime(trades_in_period["entry_time"]) >= start_time)
-                    & (pd.to_datetime(trades_in_period["entry_time"]) < end_time)
-                ]
+                if market_data_slice.empty:
+                    continue
 
-            intraday_filename = f"{base_filename}_{hours}hr.png"
-            _plot_trades_on_chart(
-                market_data_slice, trades_slice, intraday_filename, feature_spec
-            )
+                trades_slice = pd.DataFrame()
+                if not trades_in_period.empty:
+                    trades_slice = trades_in_period[
+                        (pd.to_datetime(trades_in_period["entry_time"]) < end_time)
+                        & (pd.to_datetime(trades_in_period["exit_time"]) > start_time)
+                    ]
+
+                intraday_filename = f"{base_filename}_{hours}hr.png"
+                plot_tasks.append(
+                    (market_data_slice, trades_slice, intraday_filename, feature_spec)
+                )
+
+    # Execute all plotting tasks in parallel
+    if plot_tasks:
+        with ProcessPoolExecutor(max_workers=4) as executor:
+            executor.map(_plot_wrapper, plot_tasks)
 
 
 def generate_plots(
@@ -436,8 +597,8 @@ def generate_plots(
     tag = f"{period_tag}" if period_tag else "full_period"
     df = trades_to_df(trades)
 
-    # The ProcessPoolExecutor is no longer needed since we have a single, unified function.
-    # This simplifies the logic and removes the error.
-    print("Generating selected period plots and their intraday close-ups...")
+    print(
+        f"Generating {len(df)} selected period plots and their intraday close-ups in parallel..."
+    )
     _plot_selected_periods(df, market_data, str(plot_dir), symbol, tag, feature_spec)
     print("All plots have been generated.")
