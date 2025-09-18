@@ -64,12 +64,17 @@ def prepare_data(
             logger.info(f"Force reload: deleted {data_file}")
         except Exception as e:
             logger.warning(f"Could not delete cache {data_file}: {e}")
-
     feature_spec = {
-        "ema": [300, 500, 1440, 7200],
-        "kc": [{"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"}],
+        "sma": [60, 90, 120],
+        "ema": [1440, 7200, 14400],
+        "kc": [
+            {"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"},  # first → white
+            {"n": 50, "m": 6.0, "atr_n": 50, "ma": "ema"},  # second → dark blue
+        ],
         "atr": [14],
         "rsi": [24],
+        "sma_high": [6],
+        "sma_low": [6],
         "stoch": [
             {"k_period": 5, "d_period": 5, "slowing": 5},
         ],
@@ -81,7 +86,7 @@ def prepare_data(
         start_date,
         end_date,
         spec=feature_spec,
-        with_events=False,
+        with_events=True,
         cache_dir=str(cache_dir),
     )
 
@@ -115,14 +120,21 @@ def run_period(
 
     STRATEGY_NAME = "TEST"
     feature_spec = {
-        "ema": [300, 500, 1440, 7200],
-        "kc": [{"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"}],
+        "sma": [60, 90, 120],
+        "ema": [1440, 7200, 14400],
+        "kc": [
+            {"n": 40, "m": 4.0, "atr_n": 40, "ma": "ema"},  # first → white
+            {"n": 50, "m": 6.0, "atr_n": 50, "ma": "ema"},  # second → dark blue
+        ],
         "atr": [14],
         "rsi": [24],
+        "sma_high": [6],
+        "sma_low": [6],
         "stoch": [
             {"k_period": 5, "d_period": 5, "slowing": 5},
         ],
     }
+
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
@@ -288,7 +300,7 @@ def run_periods(
     timeframe: str,
     periods: Iterable[Tuple[str, str]],
     base_seed: int = 42,
-    max_workers: int = 8,
+    max_workers: int = 5,
 ) -> None:
     """Runs multiple backtest periods in parallel."""
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -313,24 +325,22 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        ("2010-06-04", "2010-09-09"),  # Testing periode (volitile)
-        ("2014-06-29", "2015-01-01"),  # Testing periode (down )
-        ("2009-10-01", "2010-10-01"),  # Bank collapse
+        # ("2009-10-01", "2010-10-01"),  # Bank collapse --> test 3: rigimes over time:
         ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
-        ("2017-04-01", "2018-04-01"),  # Bull market
-        ("2021-05-01", "2022-10-15"),  # Bear (covid)
-        ("2023-02-01", "2024-09-02"),  # Consolidation (post-covid)
-        ("2025-01-01", "2025-09-04"),  # Current year
-        ("2023-09-01", "2025-09-04"),  # last 2 years
-        ("2014-01-01", "2015-01-01"),  # Long run (mixed)
-        ("2015-01-01", "2016-01-01"),  # Long run (mixed)
-        ("2016-01-01", "2017-01-01"),  # Long run (mixed)
-        ("2017-01-01", "2018-01-01"),  # Long run (mixed)
-        ("2018-01-01", "2019-01-01"),  # Long run (mixed)
-        ("2019-01-01", "2020-01-01"),  # Long run (mixed)
-        ("2020-01-01", "2021-01-01"),  # Long run (mixed)
-        ("2021-01-01", "2022-01-01"),  # Long run (mixed)
-        ("2022-01-01", "2023-01-01"),  # Long run (mixed)
+        # ("2017-04-01", "2018-04-01"),  # Bull market
+        # ("2021-05-01", "2022-10-15"),  # Bear (covid)
+        # ("2014-01-01", "2015-01-01"),  # Year to year
+        # ("2015-01-01", "2016-01-01"),
+        # ("2016-01-01", "2017-01-01"),
+        # ("2017-01-01", "2018-01-01"),
+        # ("2018-01-01", "2019-01-01"),
+        # ("2019-01-01", "2020-01-01"),
+        # ("2020-01-01", "2021-01-01"),
+        # ("2021-01-01", "2022-01-01"),
+        # ("2022-01-01", "2023-01-01"),
+        ("2023-01-01", "2024-09-02"),  # Consolidation (post-covid)
+        ("2023-09-01", "2025-09-04"),  # last 2 years --> test 1
+        # ("2025-01-01", "2025-09-04"),  # Current year --> test 2
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

@@ -520,14 +520,7 @@ def _plot_selected_periods(
             for i, p in enumerate(sorted(list(selected))):
                 periods_to_plot[f"active_{name}_{i+1}"] = p
 
-    # --- 2. Select three random months for broader context ---
-    all_months = sorted(md.index.to_period("M").unique())
-    if all_months:
-        num_to_sample = min(3, len(all_months))
-        for i, month_period in enumerate(random.sample(all_months, num_to_sample)):
-            periods_to_plot[f"random_month_{i+1}"] = month_period
-
-    # --- 3. Prepare and execute plotting tasks in parallel ---
+    # --- 2. Prepare and execute plotting tasks in parallel ---
     plot_tasks = []
     for p_name, p_val in periods_to_plot.items():
         # Robustly get the period character ('D', 'W', or 'M')
