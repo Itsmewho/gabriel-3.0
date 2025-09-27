@@ -1,20 +1,49 @@
 from __future__ import annotations
-from typing import Any, Optional, Set, Dict
+from typing import Any, Dict, Optional, Deque, List, Sequence
+import math
+from collections import deque
+
+import numpy as np
 import pandas as pd
 
 from backtester.strategies.base_strat import BaseStrategy
 from backtester.account_management.types import SizeRequest
-from backtester.broker import Trade
+from backtester.broker import PIP_SIZE
 
 
-class HeartbeatCrossover(BaseStrategy):
-    """
-    An asymmetrical crossover strategy with a dynamic, trend-following exit.
+# --- helpers ---
+EPS = 1e-9
 
-    -   **Entry:** Standard 'fast_pack' alignment crossover.
-    -   **Exit:** Uses a standard exit by default. However, if the trade is profitable
-        AND the short-term trend (defined by 'TREND_CHECK_MA') is confirming,
-        it switches to a much looser 'loosened_exit_line', allowing profits to run.
+
+def _round_to_step(x: float, step: float, min_lot: float, max_lot: float) -> float:
+    lots = max(0.0, math.floor(x / step) * step)
+    return max(min_lot, min(lots, max_lot))
+
+
+def _full_body_above(row: pd.Series, level: float) -> bool:
+    return float(row["open"]) > level and float(row["close"]) > level
+
+
+def _full_body_below(row: pd.Series, level: float) -> bool:
+    return float(row["open"]) < level and float(row["close"]) < level
+
+
+def _slope_norm_reg(y: Sequence[float], atr_last: float) -> float:
+    """Linear-regression slope per bar, normalized by last ATR, mapped to (0,1)."""
+    y_arr = np.asarray(y, dtype=float)
+    if y_arr.size < 2:
+        return 0.5
+    x = np.arange(y_arr.size, dtype=float)
+    beta1 = np.polyfit(x, y_arr, 1)[0]  # slope per bar
+    d = beta1 / max(abs(atr_last), EPS)
+    return 0.5 + math.atan(d) / math.pi
+
+
+class PtlAdvancedFilteredReversal(BaseStrategy):
+    """Stop-and-reverse on PTL flips with Keltner and EMA-pack confirmations.
+
+    Entries require: PTL flip + candle body relative to KC mid + KC width cap.
+    Exits may be ignored using ema_400 position vs KC and EMA-pack regression slope.
     """
 
     def __init__(
@@ -23,171 +52,188 @@ class HeartbeatCrossover(BaseStrategy):
         config: Dict[str, Any],
         strat_cfg=None,
         governor=None,
-        magic: Optional[int] = 8801,
+        magic: Optional[int] = 2029,
     ):
         super().__init__(symbol, config, strat_cfg, governor=governor)
 
-        # --- Indicator Configuration ---
-        self.fast_pack: Set[str] = set(config.get("FAST_PACK"))
-        self.signal_line: str = config.get("SIGNAL_LINE")
-        self.exit_trigger_line: str = config.get("EXIT_TRIGGER_LINE")
-        self.exit_against_line: str = config.get("EXIT_AGAINST_LINE")
-
-        # --- NEW: Trend-Following Exit Configuration ---
-        self.use_trend_exit = config.get("USE_TREND_EXIT", False)
-        if self.use_trend_exit:
-            self.trend_check_ma = config.get("TREND_CHECK_MA")
-            self.loosened_exit_line = config.get("LOOSENED_EXIT_AGAINST_LINE")
-
-        # --- Risk and Standard Parameters ---
-        self.sl_pips = float(config.get("SL_PIPS", 0))
-        self.tp_pips = float(config.get("TP_PIPS", 0))
-        self.cooldown_bars = int(config.get("COOLDOWN_BARS", 1))
-        self.eps = float(config.get("EPS", 0.0) or 0.0)
-        self.prev_row: Optional[pd.Series] = None
-        self.cooldown = 0
-        self.magic = magic
-
-    # --- Utilities ---
-    def _get_my_trade(self, broker) -> Optional[Trade]:
-        for trade in broker.open_trades:
-            if getattr(trade, "strategy_id", None) == self.name:
-                return trade
-        return None
-
-    def _is_in_profit(self, trade: Trade, current_price: float) -> bool:
-        """Checks if a trade is currently profitable, excluding costs."""
-        if trade.side == "buy":
-            return current_price > trade.entry_price
-        else:
-            return current_price < trade.entry_price
-
-    def _is_trend_confirming(self, row, side):
-        if (
-            not self.trend_check_ma
-            or pd.isna(row.get(self.trend_check_ma, None))
-            or self.prev_row is None
-            or pd.isna(self.prev_row.get(self.trend_check_ma, None))
-        ):
-            return False
-        cur = float(row[self.trend_check_ma])
-        prev = float(self.prev_row[self.trend_check_ma])
-        return (cur > prev) if side == "buy" else (cur < prev)
-
-    def _are_all_on_side(self, row: pd.Series, side: str) -> bool:
-        signal_value = row[self.signal_line]
-        if pd.isna(signal_value):
-            return False
-        vals = [row[l] for l in self.fast_pack]  # noqa: E741
-        if any(pd.isna(v) for v in vals):
-            return False
-        return (
-            all(v > signal_value + self.eps for v in vals)
-            if side == "buy"
-            else all(v < signal_value - self.eps for v in vals)
+        # columns
+        self.ptl_trena_col = self.config.get("PTL_TRENA_COL", "ptl_trena")
+        self.kc_upper_col = self.config.get("KC_UPPER_COL", "kc_30_30_2.5_upper")
+        self.kc_middle_col = self.config.get("KC_MIDDLE_COL", "kc_30_30_2.5_mid")
+        self.kc_lower_col = self.config.get("KC_LOWER_COL", "kc_30_30_2.5_lower")
+        self.ema_pack_cols: List[str] = self.config.get(
+            "EMA_PACK_COLS", ["ema_80", "ema_100", "ema_200"]
         )
+        self.ema400_col = self.config.get("EMA_400_COL", "ema_400")
+        self.atr_col = self.config.get("ATR_COL", "atr_24")
 
-    def _check_cross(self, fast_val, prev_fast, sig_val, prev_sig) -> Optional[str]:
-        # CROSS UP: was below (prev_fast <= prev_sig) → now above (fast_val > sig_val)
-        if prev_fast <= prev_sig - self.eps and fast_val > sig_val + self.eps:
-            return "buy"
-        # CROSS DOWN: was above → now below
-        if prev_fast >= prev_sig + self.eps and fast_val < sig_val - self.eps:
-            return "sell"
-        return None
+        # params
+        self.sl_pips = float(self.config.get("SL_PIPS", 18))
+        self.tp_pips = float(self.config.get("TP_PIPS", 27))
+        self.max_kc_pips = float(self.config.get("MAX_KC_PIPS", 18.0))
+        self.sell_slope_thresh = float(self.config.get("SELL_SLOPE_THRESH", 0.48))
+        self.buy_slope_thresh = float(self.config.get("BUY_SLOPE_THRESH", 0.52))
+        self.pack_window = int(
+            self.config.get("PACK_WINDOW", 10)
+        )  # bars for regression
+        self.debug = bool(self.config.get("DEBUG_REASON", False))
 
-    def _fire_trade(self, broker, t, row: pd.Series, side: str):
-        price = float(row["close"])
+        self._required_cols = [
+            self.ptl_trena_col,
+            self.kc_upper_col,
+            self.kc_middle_col,
+            self.kc_lower_col,
+            *self.ema_pack_cols,
+            self.ema400_col,
+            self.atr_col,
+            "open",
+            "close",
+        ]
+
+        # state
+        self.magic = magic
+        self.prev_row: Optional[pd.Series] = None
+        self._validated = False
+        self._current_side: Optional[str] = None
+        self._buy_trade_ema400_override = False
+        self._recent_bars: Deque[pd.Series] = deque(maxlen=self.pack_window)
+
+    # --- slope ---
+    def _pack_slope(self) -> float:
+        """Average normalized LR slope over EMA pack using last pack_window bars."""
+        if len(self._recent_bars) < 2:
+            return 0.5
+        atr_last = float(self._recent_bars[-1].get(self.atr_col, 1.0) or 1.0)
+        sl_sum = 0.0
+        n = 0
+        for col in self.ema_pack_cols:
+            try:
+                y = [b[col] for b in self._recent_bars]
+                sl = _slope_norm_reg(y, atr_last)
+                sl_sum += sl
+                n += 1
+            except Exception:
+                continue
+        return (sl_sum / max(n, 1)) if n else 0.5
+
+    # --- open ---
+    def _open_new_trade(self, broker, t, row: pd.Series, side: str):
+        if self.governor and not self.governor.allow_new_trade(self.name).ok:
+            return
+        if any(tr.strategy_id == self.name for tr in broker.open_trades):
+            return
         req = SizeRequest(
             balance=broker.balance,
-            sl_pips=self.sl_pips if self.sl_pips > 0 else 1000,
+            sl_pips=self.sl_pips,
             value_per_pip=self._value_per_pip_1lot(broker),
         )
-        lots = self.sizer.size(req).lots
+        lots_raw = self.sizer.size(req).lots
+        lots = _round_to_step(
+            lots_raw, broker.cfg.VOLUME_STEP, broker.cfg.VOLUME_MIN, 9999.0
+        )
         if lots <= 0:
-            return None
+            return
         tr = broker.open_trade(
             side=side,
-            price=price,
+            price=float(row["close"]),
             wanted_lots=lots,
-            sl_pips=self.sl_pips if self.sl_pips > 0 else None,
-            tp_pips=self.tp_pips if self.tp_pips > 0 else None,
+            sl_pips=self.sl_pips,
+            tp_pips=self.tp_pips,
             t=t,
             strategy_id=self.name,
             magic=self.magic,
         )
         if tr:
             self.setup_trade(broker, tr)
-            self.cooldown = self.cooldown_bars
-            return tr
-        return None
 
-    # --- Main Hook ---
+    # --- main ---
     def on_bar(self, broker, t, row: pd.Series):
+        self._recent_bars.append(row)
+        if not self._validated:
+            missing = [c for c in self._required_cols if c not in row.index]
+            if missing:
+                if self.debug:
+                    print(f"{t} | {self.name} :: missing columns: {missing}")
+                return
+            self._validated = True
+
         if self.prev_row is None:
             self.prev_row = row
-            return None
+            return
 
-        if self.cooldown > 0:
-            self.cooldown -= 1
+        prev_ptl, cur_ptl = self.prev_row[self.ptl_trena_col], row[self.ptl_trena_col]
+        flip_side = (
+            "sell"
+            if prev_ptl == 0 and cur_ptl == 1
+            else ("buy" if prev_ptl == 1 and cur_ptl == 0 else None)
+        )
+        if not flip_side:
+            self.prev_row = row
+            return
 
-        open_trade = self._get_my_trade(broker)
+        kc_mid = float(row[self.kc_middle_col])
+        kc_low = float(row[self.kc_lower_col])
+        kc_up = float(row[self.kc_upper_col])
+        ema400 = float(row[self.ema400_col])
+        ema_slope = self._pack_slope()
 
-        # --- State 1: In a trade, manage exit ---
-        if open_trade:
-            active_exit_against_line = self.exit_against_line
-
-            # --- DYNAMIC EXIT LOGIC ---
-            if self.use_trend_exit:
-                is_profitable = self._is_in_profit(open_trade, row["close"])
-                is_trending = self._is_trend_confirming(row, open_trade.side)
-
-                if is_profitable and is_trending:
-                    active_exit_against_line = self.loosened_exit_line
-                    if not getattr(open_trade, "is_exit_loosened", False):
-                        setattr(open_trade, "is_exit_loosened", True)
+        # --- EXIT FILTERS with AND logic ---
+        if self._current_side and flip_side != self._current_side:
+            if self._current_side == "sell" and flip_side == "buy":
+                # keep SELL only if long-term AND short-term both bearish
+                if (ema400 > kc_mid) and (ema_slope <= self.sell_slope_thresh):
+                    if self.debug:
                         print(
-                            f"{t} | Trade {open_trade.id} is profitable and trending. Exit loosened."
+                            f"{t} | {self.name} :: hold SELL (ema400>mid and slope={ema_slope:.3f}<=th)"
                         )
-                else:
-                    if getattr(open_trade, "is_exit_loosened", False):
-                        setattr(open_trade, "is_exit_loosened", False)
+                    self.prev_row = row
+                    return
+            if self._current_side == "buy" and flip_side == "sell":
+                # maintain BUY override only while ema400 < lower AND slope is bullish
+                if ema400 < kc_low:
+                    self._buy_trade_ema400_override = True
+                elif ema400 > kc_mid:
+                    self._buy_trade_ema400_override = False
+                if self._buy_trade_ema400_override and (
+                    ema_slope >= self.buy_slope_thresh
+                ):
+                    if self.debug:
                         print(
-                            f"{t} | Trade {open_trade.id} condition ended. Exit tightened."
+                            f"{t} | {self.name} :: hold BUY (ema400<lower and slope={ema_slope:.3f}>=th)"
                         )
+                    self.prev_row = row
+                    return
 
-            # --- Check for the exit signal using the determined line ---
-            exit_side = "sell" if open_trade.side == "buy" else "buy"
-            exit_cross_event = self._check_cross(
-                row[self.exit_trigger_line],
-                self.prev_row[self.exit_trigger_line],
-                row[active_exit_against_line],
-                self.prev_row[active_exit_against_line],
-            )
+        # --- ENTRY FILTERS ---
+        kc_width = kc_up - kc_low
+        if kc_width > (self.max_kc_pips * PIP_SIZE):
+            if self.debug:
+                print(
+                    f"{t} | {self.name} :: skip entry: kc_width {kc_width:.6f} > {self.max_kc_pips} pips"
+                )
+            self.prev_row = row
+            return
+        if ((flip_side == "sell") and not _full_body_above(row, kc_mid)) or (
+            (flip_side == "buy") and not _full_body_below(row, kc_mid)
+        ):
+            if self.debug:
+                print(
+                    f"{t} | {self.name} :: skip entry: body not on correct side of kc_mid {kc_mid:.6f}"
+                )
+            self.prev_row = row
+            return
 
-            if exit_cross_event == exit_side:
-                reason = f"Invalidation: {self.exit_trigger_line} recrossed {active_exit_against_line}"
-                print(f"{t} | EXITING trade {open_trade.id} due to: {reason}")
-                broker.close_trade(open_trade, row["close"], reason, t)
-                self.cooldown = self.cooldown_bars
-
-        # --- State 2: Flat, looking for an entry ---
-        else:
-            if self.cooldown > 0 or (
-                self.governor and not self.governor.allow_new_trade(self.name).ok
+        # --- stop-and-reverse ---
+        side_to_close = "buy" if flip_side == "sell" else "sell"
+        for tr in list(broker.open_trades):
+            if (
+                getattr(tr, "strategy_id", None) == self.name
+                and tr.side == side_to_close
             ):
-                self.prev_row = row
-                return None
+                broker.close_trade(tr, float(row["close"]), "PTL Advanced Reversal", t)
 
-            is_buy_signal = self._are_all_on_side(row, "buy")
-            was_buy_signal = self._are_all_on_side(self.prev_row, "buy")
-            is_sell_signal = self._are_all_on_side(row, "sell")
-            was_sell_signal = self._are_all_on_side(self.prev_row, "sell")
-
-            if is_buy_signal and not was_buy_signal:
-                self._fire_trade(broker, t, row, "buy")
-            elif is_sell_signal and not was_sell_signal:
-                self._fire_trade(broker, t, row, "sell")
+        print(f"{t} | *** PTL FLIP to {flip_side.upper()} CONFIRMED *** by {self.name}")
+        self._open_new_trade(broker, t, row, flip_side)
+        self._current_side = flip_side
 
         self.prev_row = row
-        return None

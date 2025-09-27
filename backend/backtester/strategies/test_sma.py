@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Optional, Dict, Set
+from typing import Any, Optional, Sequence, Dict, Set  # noqa: F401
 import math
 import pandas as pd
 
@@ -14,8 +14,9 @@ def _round_to_step(x: float, step: float, min_lot: float, max_lot: float) -> flo
 
 class MultiStageConfirmationCross(BaseStrategy):
     """
-    A stateful strategy that waits for a multi-stage sequence of crossovers
-    and includes a proactive trade invalidation exit signal.
+    A stateful strategy that waits for a multi-stage sequence of crossovers.
+    This version supports up to three confirmation stages and includes a state
+    check to correctly identify conditions that are already met.
     """
 
     def __init__(
@@ -32,15 +33,12 @@ class MultiStageConfirmationCross(BaseStrategy):
             config.get("FAST_PACK", ["sma_high_30", "sma_low_30", "ema_50", "ema_14"])
         )
 
+        # --- Stage Definitions (fully configurable) ---
+        # --- Stage Definitions  ---
         self.stage1_signal: Dict[str, str] = config.get("STAGE1_SIGNAL")
         self.stage2_signal: Dict[str, str] = config.get("STAGE2_SIGNAL")
+        # --- NEW: Optional Third Stage ---
         self.stage3_signal: Dict[str, str] = config.get("STAGE3_SIGNAL")
-
-        # --- NEW: Invalidation Line Configuration ---
-        # Defaults to the Stage 2 line if not explicitly provided
-        self.invalidation_line: Dict[str, str] = config.get(
-            "INVALIDATION_SIGNAL", self.stage2_signal
-        )
 
         self.window_bars = int(config.get("CONFIRM_WINDOW_BARS", 30))
         self.sl_pips = float(config.get("SL_PIPS", 10))
@@ -103,51 +101,12 @@ class MultiStageConfirmationCross(BaseStrategy):
                 return tr
         return None
 
-    # --- NEW: Trade Management Logic ---
-    def _manage_open_trades(self, broker, t, row: pd.Series):
-        """Checks open trades for the invalidation condition."""
-        if self.prev_row is None:
-            return
-
-        # Iterate over a copy, as we may modify the list by closing trades
-        for trade in list(broker.open_trades):
-            if getattr(trade, "strategy_id", None) != self.name:
-                continue
-
-            side = trade.side
-            invalidation_signal_name = self.invalidation_line[side]
-            opposite_side = "sell" if side == "buy" else "buy"
-
-            for fast_line in self.fast_pack:
-                # Check if any fast line has recrossed in the opposite direction
-                cross_dir = self._check_cross(
-                    row[fast_line],
-                    self.prev_row[fast_line],
-                    row[invalidation_signal_name],
-                    self.prev_row[invalidation_signal_name],
-                )
-
-                if cross_dir == opposite_side:
-                    reason = f"Invalidation: {fast_line} recrossed {invalidation_signal_name}"
-                    print(f"{t} | EXITING trade {trade.id} due to: {reason}")
-
-                    # --- CORRECTED LINE ---
-                    # Pass the entire `trade` object, not just the `trade.id`.
-                    broker.close_trade(trade, row["close"], reason, t)
-
-                    # Once one line invalidates, the trade is closed. No need to check others.
-                    break
-
     # --- Main Hook ---
     def on_bar(self, broker, t, row: pd.Series):
         if self.prev_row is None:
             self.prev_row = row
-            return
+            return None
 
-        # --- 1. Manage existing trades first (proactive exits) ---
-        self._manage_open_trades(broker, t, row)
-
-        # --- 2. Standard checks & cooldown ---
         if self.cooldown > 0:
             self.cooldown -= 1
 
@@ -159,7 +118,6 @@ class MultiStageConfirmationCross(BaseStrategy):
             self.prev_row = row
             return None
 
-        # --- 3. Look for new entry signals ---
         if self.pending and (row.name - self.pending["t0"]) > pd.Timedelta(
             minutes=self.window_bars
         ):
@@ -197,6 +155,7 @@ class MultiStageConfirmationCross(BaseStrategy):
         if self.pending:
             side = self.pending["side"]
 
+            # --- STAGE 1 LOGIC ---
             if self.pending["stage"] == 1:
                 sig_line = self.stage1_signal[side]
                 for fast_line in self.fast_pack - self.pending["stage1_crossed"]:
@@ -216,6 +175,7 @@ class MultiStageConfirmationCross(BaseStrategy):
                     )
                     self.pending["stage"] = 2
 
+            # --- STAGE 2 LOGIC ---
             if self.pending["stage"] == 2:
                 sig_line = self.stage2_signal[side]
                 for fast_line in self.fast_pack - self.pending["stage2_crossed"]:
@@ -234,6 +194,7 @@ class MultiStageConfirmationCross(BaseStrategy):
                     )
                     self.pending["stage"] = 3
 
+            # --- STAGE 3 LOGIC ---
             if self.pending["stage"] == 3:
                 sig_line = self.stage3_signal[side]
                 for fast_line in self.fast_pack - self.pending["stage3_crossed"]:

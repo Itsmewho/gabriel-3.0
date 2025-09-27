@@ -59,7 +59,7 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
                 }
             )
 
-    # --- ADDED: Stochastic Oscillator ---
+    # Stochastic Oscillator
     if "stoch" in spec:
         for stoch in _ensure_list(spec.get("stoch")):
             k = int(stoch.get("k_period", 14))
@@ -67,6 +67,11 @@ def _spec_columns(spec: Optional[Dict[str, Any]]) -> Set[str]:
             s = int(stoch.get("slowing", 3))
             out.add(f"stoch_{k}_{d}_{s}_k")
             out.add(f"stoch_{k}_{d}_{s}_d")
+
+    # PTL
+    if "ptl" in spec:
+        if _ensure_list(spec.get("ptl")):
+            out.update({"ptl_slow", "ptl_fast", "ptl_trend", "ptl_trena", "ptl_arrow"})
 
     # Better Volume context color
     if spec.get("better_volume"):
@@ -138,7 +143,7 @@ def _sub_spec_for_missing(
         if need_kc:
             sub["kc"] = need_kc if len(need_kc) > 1 else need_kc[0]
 
-    # --- ADDED: Stochastic Oscillator ---
+    # Stochastic Oscillator
     if "stoch" in spec:
         need_stoch: List[Dict[str, Any]] = []
         for stoch in _ensure_list(spec.get("stoch")):
@@ -150,6 +155,13 @@ def _sub_spec_for_missing(
                 need_stoch.append(stoch)
         if need_stoch:
             sub["stoch"] = need_stoch if len(need_stoch) > 1 else need_stoch[0]
+
+    # PTL
+    if "ptl" in spec:
+        ptl_cols = {"ptl_slow", "ptl_fast", "ptl_trend", "ptl_trena", "ptl_arrow"}
+        if ptl_cols & missing:
+            pts = _ensure_list(spec.get("ptl"))
+            sub["ptl"] = pts[0] if pts else {"fast": 15, "slow": 11}
 
     return sub
 

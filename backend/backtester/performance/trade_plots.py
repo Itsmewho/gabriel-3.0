@@ -89,11 +89,21 @@ def plot_trades(
     fig_dpi: int = 450,
     add_standard_emas: bool = True,
     standard_ema_minutes: Sequence[int] = (
+        16200,
+        32400,
+        64800,
         129600,
         262800,
         525600,
-    ),  # 3 months - half year - year
-    standard_ema_colors: Sequence[str] = ("lightblue", "darkblue", "gold"),
+    ),  # 1.5week, 3w, 1.5, 3 months - half year - year
+    standard_ema_colors: Sequence[str] = (
+        "lightblue",
+        "darkblue",
+        "gold",
+        "green",
+        "purple",
+        "crimson",
+    ),
 ):
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
 

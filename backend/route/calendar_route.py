@@ -3,12 +3,10 @@ from operations.sql_operations import fetch_records
 from datetime import datetime
 from typing import List, Dict, Any
 from flask_cors import CORS
+from typing import Union, Tuple
 
 calendar_bp = Blueprint("calendar", __name__)
 CORS(calendar_bp, resources={r"/*": {"origins": "*"}})
-
-
-from typing import Union, Tuple
 
 
 @calendar_bp.route("/api/calendar", methods=["GET"])

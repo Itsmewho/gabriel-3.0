@@ -361,6 +361,50 @@ def _plot_trades_on_chart(
             )
         )
 
+        # --- PTL (Price-Trend-Line) Plotting ---
+    # This creates a single line that changes color based on the trend state.
+    # --- PTL PLOTTING LOGIC ---
+    if "ptl" in feature_spec:
+        # We only need these columns to plot the flip markers
+        ptl_cols = ["ptl_trena", "High", "Low"]
+        if all(col in df.columns for col in ptl_cols):
+
+            # Find the exact candle where the trend value changes
+            trend_changed = df["ptl_trena"].diff() != 0
+
+            # Calculate the position for the marker where the trend *becomes* blue (UP)
+            up_trend_start = np.where(
+                (df["ptl_trena"] == 0) & (trend_changed),
+                df["Low"] - (df["High"] - df["Low"]).mean() * 0.3,
+                np.nan,
+            )
+            # Calculate the position for the marker where the trend *becomes* red (DOWN)
+            down_trend_start = np.where(
+                (df["ptl_trena"] == 1) & (trend_changed),
+                df["High"] + (df["High"] - df["Low"]).mean() * 0.3,
+                np.nan,
+            )
+
+            # Plot the up-trend start arrows (^)
+            feature_plots.append(
+                mpf.make_addplot(
+                    up_trend_start,
+                    type="scatter",
+                    marker="^",
+                    color="dodgerblue",
+                    markersize=25,
+                )
+            )
+            # Plot the down-trend start arrows (v)
+            feature_plots.append(
+                mpf.make_addplot(
+                    down_trend_start,
+                    type="scatter",
+                    marker="v",
+                    color="crimson",
+                    markersize=25,
+                )
+            )
     # --- ADDED: Stochastic Oscillator Plotting ---
     if has_stoch:
         for stoch in stoch_configs:

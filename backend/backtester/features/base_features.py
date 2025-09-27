@@ -1,4 +1,3 @@
-# --- backtester/features/base_features.py  ---
 """
 Basic TA feature builders for SMA, EMA, RSI, ATR, Bollinger Bands, and Keltner Channels.
 Adds SMA on highs and lows: keys `sma_high` and `sma_low`.
@@ -21,11 +20,21 @@ Stochastic config accepts either a dict or a list of dicts under key "stoch":
   }
 Outputs columns: stoch_{k_period}_{d_period}_{slowing}_k, stoch_{k_period}_{d_period}_{slowing}_d
 
+PTL config accepts either a dict or a list of dicts under key "ptl":
+  ptl = {
+      "fast": 3,
+      "slow": 7
+  }
+Outputs columns: ptl_slow, ptl_fast, ptl_trend, ptl_trena, ptl_arrow
 """
+
 from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, Iterable, Optional, List, Union
+
+from backtester.features.ptl import add_ptl_features
+
 
 # --------- core helpers ---------
 
@@ -157,6 +166,7 @@ def apply_basic_features(
     cfg keys (all optional):
       ...
       "stoch": dict or list of dicts, see module docstring
+      "ptl": dict or list of dicts, see module docstring
     """
     _require_cols(df, ["open", "high", "low", "close"])
     close = df["close"]
@@ -224,44 +234,17 @@ def apply_basic_features(
             stoch_df = _stochastic(high, low, close, k_period=k, d_period=d, slowing=s)
             df = df.join(stoch_df)
 
+    # PTL (Price-Trend-Line)
+    if "ptl" in cfg:
+        ptl_cfgs: Union[Dict[str, Any], List[Dict[str, Any]]] = cfg["ptl"]
+        if isinstance(ptl_cfgs, dict):
+            ptl_cfgs = [ptl_cfgs]
+        for p in ptl_cfgs:
+            f = int(p.get("fast", 3))
+            s = int(p.get("slow", 7))
+            df = add_ptl_features(df, fast=f, slow=s)
+
     return df
 
 
 __all__ = ["apply_basic_features"]
-
-
-# --- backtester/features/features_cache.py (patch guidance) ---
-# Extend _spec_columns and _sub_spec_for_missing to support sma_high/sma_low and kc
-#
-# in _spec_columns(spec):
-#   add:
-#     for n in spec.get("sma_high", []): out.add(f"sma_high_{int(n)}")
-#     for n in spec.get("sma_low", []): out.add(f"sma_low_{int(n)}")
-#   for kc in ensure_list(spec.get("kc", [])):
-#       n = int(kc.get("n", 20)); atrn = int(kc.get("atr_n", n)); m = float(kc.get("m", 2.0))
-#       out |= {f"kc_{n}_{atrn}_{m}_mid", f"kc_{n}_{atrn}_{m}_upper", f"kc_{n}_{atrn}_{m}_lower"}
-#
-# in _sub_spec_for_missing(spec, missing):
-#   mirror sma blocks for sma_high and sma_low
-#   for kc in ensure_list(spec.get("kc", [])):
-#       n = int(kc.get("n", 20)); atrn = int(kc.get("atr_n", n)); m = float(kc.get("m", 2.0))
-#       need_mid = f"kc_{n}_{atrn}_{m}_mid" in missing
-#       need_up  = f"kc_{n}_{atrn}_{m}_upper" in missing
-#       need_lo  = f"kc_{n}_{atrn}_{m}_lower" in missing
-#       if need_mid or need_up or need_lo:
-#           (sub.setdefault("kc", [])).append({"n": n, "atr_n": atrn, "m": m, "ma": kc.get("ma", "ema")})
-#
-# helper ensure_list(x): return x if isinstance(x, list) else ([x] if x else [])
-#
-# --- Example request spec ---
-# feature_spec = {
-#   "sma": [12,14,20,30,50,150],
-#   "sma_high": [20,50,150],
-#   "sma_low": [20,50,150],
-#   "ema": [14,18,20,24,30,40,50,130,150],
-#   "rsi": [14],
-#   "atr": [14],
-#   "vol_sma": [10,14,20,30,40,50],
-#   "kc": [{"n":20, "m":2.0, "atr_n":20, "ma":"ema"}],
-#   "bb": {"n": 20, "k": 2.0},
-# }
