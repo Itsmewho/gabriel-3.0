@@ -1,0 +1,53 @@
+# config.yaml
+features:
+  ema: [110, 130, 500]
+  kc:
+    - n: 50 # KC #1 → white (strategy uses this one)
+      m: 2.5
+      atr_n: 50
+      ma: "ema"
+    - n: 50 # KC #2 → dark blue
+      m: 3.5
+      atr_n: 50
+      ma: "ema"
+    - n: 50 # KC #3 → brown
+      m: 5.0
+      atr_n: 50
+      ma: "ema"
+  atr: [24]
+  ptl:
+    - fast: 3
+      slow: 7
+  better_volume:
+    lookback: 30
+  regime:
+    trend_fast: 50
+    trend_slow: 200
+    trend_eps: 0.0
+    vol_window: 60
+    bv_lookback: 30
+
+risk_management:
+  risk_mode: "FIXED"
+  risk_pct: 0.01
+  max_risk_pct_per_trade: 0.01
+  max_drawdown_pct: 0.50
+  max_concurrent_trades: 10
+
+strategy_params:
+  name: "HEARTBEAT"
+  PTL_TRENA_COL: "ptl_trena"
+  EMA130_COL: "ema_130"
+  EMA110_COL: "ema_110"
+  EMA400_COL: "ema_500"
+  KC_MID_COL: "kc_50_50_2.5_mid"
+  KC_UP_COL: "kc_50_50_2.5_upper"
+  KC_LOW_COL: "kc_50_50_2.5_lower"
+  SL_PIPS: 200
+  TP_PIPS: 800
+  DEBUG: false
+  BUY_ON_UP: true
+  BV_COL: "bv_color"
+  TREND_COL: "trend_regime"
+  BV_STRICT: true
+  BV_ALLOW_NEUTRAL: false

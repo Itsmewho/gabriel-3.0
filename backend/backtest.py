@@ -7,9 +7,14 @@ from pathlib import Path
 from typing import Iterable, Tuple
 from utils.helpers import setup_logger, green, reset
 from concurrent.futures import ProcessPoolExecutor
+import yaml
 
 # Global Config
 from backtester.config.backtest_config import BACKTEST_CONFIG
+
+# Settings Config
+with open("config.yaml", "r") as f:
+    CONFIG = yaml.safe_load(f)
 
 # Auditors
 from backtester.account_management.account_audit import export_account_audit
@@ -24,7 +29,7 @@ from backtester.account_management.govorner import RiskGovernor
 
 
 # Strategies to test:
-from backtester.strategies.heartbeat import PtlAdvancedFilteredReversal
+from backtester.strategies.heartbeat import MyOwnHeartbeat
 
 # Loaders
 from backtester.features.features_cache import ensure_feature_parquet
@@ -36,11 +41,7 @@ from backtester.performance.md_reports import generate_markdown_report
 from backtester.performance.trade_svg import export_trades_csv
 from backtester.performance.regime_eval import regime_report, trades_to_df
 from backtester.performance.trade_plots import plot_trades
-
-# from backtester.performance.regime_vol_plots import (
-#     combined_regime_plot,
-# )
-
+from backtester.performance.weekly_walkforward import run_weekly_break_analysis
 
 # Broker
 from backtester.broker import BrokerConfig
@@ -69,16 +70,7 @@ def prepare_data(
             logger.info(f"Force reload: deleted {data_file}")
         except Exception as e:
             logger.warning(f"Could not delete cache {data_file}: {e}")
-    feature_spec = {
-        "ema": [80, 100, 120, 400],
-        "sma_high": [50],
-        "sma_low": [50],
-        "kc": [
-            {"n": 30, "m": 2.5, "atr_n": 30, "ma": "ema"},
-        ],
-        "atr": [24],
-        "ptl": [{"fast": 3, "slow": 7}],
-    }
+    feature_spec = CONFIG["features"]
 
     df = ensure_feature_parquet(
         symbol,
@@ -122,54 +114,29 @@ def run_period(
         print(f"No market data for period {period_tag}. Skipping.")
         return
 
-    feature_spec = {
-        "ema": [80, 100, 120, 400],
-        "sma_high": [50],
-        "sma_low": [50],
-        "kc": [
-            {"n": 30, "m": 2.5, "atr_n": 30, "ma": "ema"},
-        ],
-        "atr": [24],
-        "ptl": [{"fast": 3, "slow": 7}],
-    }
-
-    STRATEGY_NAME = "PTL_KC_SHORTS"
+    STRATEGY_NAME = CONFIG["strategy_params"]["name"]
     cfg = BrokerConfig(**BACKTEST_CONFIG)
     broker = Broker(cfg)
 
+    risk_cfg = CONFIG["risk_management"]
     cfg_map = {
         STRATEGY_NAME: StrategyConfig(
-            risk_mode=RiskMode.FIXED,
-            risk_pct=0.05,
+            risk_mode=RiskMode[risk_cfg["risk_mode"]],
+            risk_pct=risk_cfg["risk_pct"],
             lot_min=cfg.VOLUME_MIN,
             lot_step=cfg.VOLUME_STEP,
             lot_max=100.0,
-            max_risk_pct_per_trade=0.05,
-            max_drawdown_pct=0.30,
-            max_concurrent_trades=10,
+            max_risk_pct_per_trade=risk_cfg["max_risk_pct_per_trade"],
+            max_drawdown_pct=risk_cfg["max_drawdown_pct"],
+            max_concurrent_trades=risk_cfg["max_concurrent_trades"],
         )
     }
     governor = RiskGovernor(cfg_map)
 
     strategies = [
-        PtlAdvancedFilteredReversal(
+        MyOwnHeartbeat(
             symbol=symbol,
-            config={
-                "name": STRATEGY_NAME,
-                "PTL_TRENA_COL": "ptl_trena",
-                "KC_UPPER_COL": "kc_30_30_2.5_upper",
-                "KC_MIDDLE_COL": "kc_30_30_2.5_mid",  # if your column is *_middle, set it here
-                "KC_LOWER_COL": "kc_30_30_2.5_lower",
-                "EMA_PACK_COLS": ["ema_80", "ema_100", "ema_120"],
-                "EMA_400_COL": "ema_400",
-                "ATR_COL": "atr_24",
-                "PACK_WINDOW": 10,  # regression window
-                "SELL_SLOPE_THRESH": 0.48,  # keep SELL if slope <= 0.48
-                "BUY_SLOPE_THRESH": 0.52,  # keep BUY if slope >= 0.52
-                "MAX_KC_PIPS": 18,  # block entries if width > 18 pips
-                "SL_PIPS": 18,
-                "TP_PIPS": 80,
-            },
+            config=CONFIG["strategy_params"],
             strat_cfg=cfg_map[STRATEGY_NAME],
             governor=governor,
         )
@@ -186,12 +153,13 @@ def run_period(
     metrics_dir = base_out_dir / "metrics"
     regime_dir = metrics_dir / "regime"
     regime_plots_dir = metrics_dir / "regime_plots"
-
+    walkforward_dir = metrics_dir / "walkforward"
     audit_dir.mkdir(parents=True, exist_ok=True)
     evals_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     regime_dir.mkdir(parents=True, exist_ok=True)
     regime_plots_dir.mkdir(parents=True, exist_ok=True)
+    walkforward_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Backtest loop ---
     alloc = cfg.INITIAL_BALANCE
@@ -279,7 +247,7 @@ def run_period(
             out_dir=str(metrics_dir),
             symbol=symbol,
             period_tag=period_tag,
-            feature_spec=feature_spec,
+            feature_spec=CONFIG["features"],
         )
 
     plot_trades(
@@ -287,11 +255,16 @@ def run_period(
         broker.trade_history,
         str(metrics_dir / f"{symbol}_trade_plot_{period_tag}.png"),
     )
-
     logger.info(
         green
         + f"Finished period {period_tag} | Final balance: {broker.balance:.2f}"
         + reset
+    )
+    run_weekly_break_analysis(
+        market_data=market_data,
+        out_dir=str(walkforward_dir),
+        symbol=symbol,
+        period_tag=period_tag,
     )
 
     # combined_regime_plot(
@@ -333,10 +306,10 @@ def run_periods(
 if __name__ == "__main__":
     # Define your periods here
     PERIODS = [
-        # ("2009-10-01", "2010-10-01"),  # Bank collapse --> test 3: rigimes over time:
-        # ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
-        # ("2017-04-01", "2018-04-01"),  # Bull market
-        # ("2021-05-01", "2022-10-15"),  # Bear (covid)
+        ("2009-10-01", "2010-10-01"),  # Bank collapse --> test 3: rigimes over time:
+        ("2014-01-01", "2015-01-01"),  # Brexit (bear market)
+        ("2017-04-01", "2018-04-01"),  # Bull market
+        ("2021-05-01", "2022-10-15"),  # Bear (covid)
         # ("2014-01-01", "2015-01-01"),  # Year to year
         # ("2015-01-01", "2016-01-01"),
         # ("2016-01-01", "2017-01-01"),
@@ -346,10 +319,12 @@ if __name__ == "__main__":
         # ("2020-01-01", "2021-01-01"),
         # ("2021-01-01", "2022-01-01"),
         # ("2022-01-01", "2023-01-01"),
-        # ("2023-01-01", "2024-09-02"),  # Consolidation (post-covid)
-        # ("2023-09-01", "2025-09-17"),  # last 2 years --> test 1
-        # ("2025-01-01", "2025-09-04"),  # Current year --> test 2
-        ("2021-09-11", "2022-10-01"),  # Current year --> test 2
+        ("2007-05-01", "2025-10-01"),
+        ("2023-01-01", "2024-09-02"),  # Consolidation (post-covid)
+        ("2023-09-01", "2025-09-17"),  # last 2 years --> test 1
+        ("2025-01-01", "2025-09-04"),  # Current year --> test 2
+        ("2014-01-01", "2025-09-04"),  # long run
+        ("2021-09-11", "2022-10-01"),  # bear test
     ]
 
     SYMBOL, TIMEFRAME = "EURUSD", "1m"

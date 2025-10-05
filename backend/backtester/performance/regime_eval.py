@@ -120,7 +120,7 @@ def prepare_regime_indicators(
     trend_slow: int = 200,
     trend_eps: float = 0.0,
     vol_window: int = 60,
-    bv_lookback: int = 30,  # NEW
+    bv_lookback: int = 30,
 ) -> pd.DataFrame:
     df = _prep_market(market_data)
     close = df["close"].astype(float)

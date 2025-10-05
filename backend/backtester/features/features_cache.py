@@ -7,6 +7,7 @@ import pandas as pd
 from backtester.data.loaders import fetch_sql_market_data, fetch_event_features
 from backtester.features.base_features import apply_basic_features
 from backtester.features.better_volume_indicator import add_better_volume_mql
+from backtester.features.regime_features import add_regime_columns
 
 OHLC = ["open", "high", "low", "close", "tick_volume"]
 
@@ -229,6 +230,11 @@ def ensure_feature_parquet(
         # Compute and append
         bv_df = add_better_volume_mql(df.copy(), lookback=lookback)
         df["bv_color"] = bv_df["bv_color"].astype("string")
+        df.to_parquet(fname)
+
+    if spec.get("regime"):
+        reg_cfg = spec["regime"] if isinstance(spec["regime"], dict) else {}
+        df = add_regime_columns(df, reg_cfg)
         df.to_parquet(fname)
 
     return df

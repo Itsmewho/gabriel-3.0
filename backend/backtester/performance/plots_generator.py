@@ -22,6 +22,7 @@ warnings.filterwarnings(
 
 # Import the executor for parallel processing
 DARK_BLUE = "#0d47a1"
+BROWN = "saddlebrown"
 
 
 def trades_to_df(trades: Iterable[Trade]) -> pd.DataFrame:
@@ -288,19 +289,28 @@ def _plot_trades_on_chart(
     fill_between_cfg = []
 
     if "kc" in feature_spec:
-        for kc_cfg in feature_spec["kc"]:
+        kc_list = feature_spec["kc"]
+        if isinstance(kc_list, dict):
+            kc_list = [kc_list]
+
+        palette = ["white", DARK_BLUE, BROWN]
+
+        for i, kc_cfg in enumerate(kc_list):
             n = kc_cfg.get("n", 20)
-            atr_n = kc_cfg.get("atr_n", 20)
+            atr_n = kc_cfg.get("atr_n", n)
             m = kc_cfg.get("m", 2.0)
+
             mid_col = f"kc_{n}_{atr_n}_{m}_mid"
             upper_col = f"kc_{n}_{atr_n}_{m}_upper"
             lower_col = f"kc_{n}_{atr_n}_{m}_lower"
+
+            color = palette[i % len(palette)]
 
             if mid_col in df.columns:
                 feature_plots.append(
                     mpf.make_addplot(
                         df[mid_col],
-                        color="white",  # enforce white
+                        color=color,
                         linestyle="-",
                         width=0.6,
                         label=f"KC Mid {n}/{atr_n}/{m}",
@@ -310,7 +320,7 @@ def _plot_trades_on_chart(
                 feature_plots.append(
                     mpf.make_addplot(
                         df[upper_col],
-                        color="white",  # enforce white
+                        color=color,
                         linestyle="--",
                         width=0.6,
                     )
@@ -319,22 +329,23 @@ def _plot_trades_on_chart(
                 feature_plots.append(
                     mpf.make_addplot(
                         df[lower_col],
-                        color="white",  # enforce white
+                        color=color,
                         linestyle="--",
                         width=0.6,
                     )
                 )
 
-            # Optional shading between upper and lower
+            # Optional shading between upper and lower for this KC, use same hue
             if upper_col in df.columns and lower_col in df.columns:
                 add_plots.append(
                     mpf.make_addplot(
                         df[upper_col].combine(df[lower_col], max),
-                        color="white",
-                        alpha=0.1,
+                        color=color,
+                        alpha=0.10,
                         width=0.0,
                     )
                 )
+
     if has_rsi:
         for period in feature_spec["rsi"]:
             col = f"rsi_{period}"
@@ -558,7 +569,7 @@ def _plot_selected_periods(
             selected = {periods[i] for i in indices_to_get}
 
             # Add up to 2 random periods for variety
-            num_random = min(2, len(periods))
+            num_random = min(7, len(periods))
             selected.update(random.sample(periods, num_random))
 
             for i, p in enumerate(sorted(list(selected))):
@@ -628,14 +639,12 @@ def generate_plots(
     period_tag: str | None = None,
     feature_spec: Dict[str, Any] | None = None,
 ):
+
+    plot_dir = Path(out_dir) / "plots"
     """Generates a comprehensive set of charts for strategy analysis."""
     plot_dir = Path(out_dir) / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{period_tag}" if period_tag else "full_period"
     df = trades_to_df(trades)
-
-    print(
-        f"Generating {len(df)} selected period plots and their intraday close-ups in parallel..."
-    )
     _plot_selected_periods(df, market_data, str(plot_dir), symbol, tag, feature_spec)
     print("All plots have been generated.")
