@@ -50,7 +50,7 @@ def get_trend_evaluation(symbol, timeframe):
 
         return jsonify({"success": True, "data": results})
 
-    except Exception as e:
+    except Exception as e:  # noqa: F841
         print("--- AN UNEXPECTED ERROR OCCURRED IN TREND EVALUATION ---")
         traceback.print_exc()
         return (
